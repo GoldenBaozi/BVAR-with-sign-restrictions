@@ -13,9 +13,9 @@
 
 Let's consider a m-dimension VAR(p) model:
 
-$$
+```math
 Y_t = \alpha + \sum_{s=1}^{p}Y_{t-s} \beta_{s} + \epsilon_{t} \tag{1}
-$$
+```
 
 where we assume disturbance terms are iid along time series, $\epsilon_{t} \sim \mathcal{N}(0, \Sigma)$, but $\Sigma$ may not be diagonal. An illustrative example is a bi-variate VAR(2) model containing GDP $y_{t}$ and inflation $\pi_{t}$:
 
