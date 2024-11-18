@@ -1,5 +1,6 @@
 library(R6)
 library(expm)
+library(MASS)
 # TODO add bootstrap of IRF and historical decomposition
 VAR <- R6Class(
   "VAR",
@@ -179,5 +180,15 @@ VAR <- R6Class(
         return(HDC.ijt)
       }
     }
+  )
+)
+# TODO write a gibbs sampler for VAR bayesian estimation
+Gsampler <- R6Class(
+  "Gibbs Sampler",
+  public = list(
+
+  ),
+  private = list(
+
   )
 )
