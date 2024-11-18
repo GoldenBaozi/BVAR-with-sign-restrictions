@@ -51,7 +51,7 @@ VAR <- R6Class(
         self$U <- self$Y - self$X %*% self$beta
         self$Sigma <- t(self$U) %*% self$U / (self$T.est - self$n.var - 1)
       }
-      cat("* parameters of VAR estimated using ", method, ", residual and Cov matrix yield.")
+      cat("* parameters of VAR estimated using ", method, ", residual and Cov matrix yield.\n")
     },
     identify = function(method = "recursive", IV = NA, sign = NA) {
       # TODO add IV and sign identification methods
@@ -73,6 +73,10 @@ VAR <- R6Class(
     IRF.plot = function(shock = NA_character_, response = NA_character_, hor = self$hor) { # by default plot the whole horizon
       shock.id <- which(self$var.names == shock)
       res.id <- which(self$var.names == response)
+      violation <- (identical(shock.id, integer(0)) | identical(res.id, integer(0)))
+      if (violation) {
+        stop("Please give appropriate variable names")
+      }
       irf.to.plot <- self$IRF[res.id, shock.id, 1:(hor + 1)]
       x <- 0:hor
       if (hor <= self$hor) {
@@ -85,6 +89,27 @@ VAR <- R6Class(
         abline(h = 0, lwd = 3, lty = 2)
       } else {
         cat("horizon > ", self$hor, " not allowed")
+      }
+    },
+    HDC.compute = function(end1 = NA_character_, end2 = NA_character_, shock = NA_character_, res = NA_character_) {
+      end1.id <- which(self$time[(self$p.lag + 1):self$T] == end1)
+      end2.id <- which(self$time[(self$p.lag + 1):self$T] == end2)
+      violation <- (identical(end1.id, integer(0)) | identical(end2.id, integer(0)) | end1.id > end2.id)
+      if (violation) {
+        stop("Please set appropriate time periods")
+      } else if (end2.id > end1.id) {
+        HDC.ij <- vector("numeric", (end2.id - end1.id))
+        for (t in (end1.id + 1):end2.id) {
+          HDC.ij[(t - end1.id)] <- private$HDC.core(t, shock, res) - private$HDC.core(end1.id, shock, res)
+        }
+        return(HDC.ij)
+      } else {
+        shock.id <- which(self$var.names == shock)
+        res.id <- which(self$var.names == res)
+        eps.used <- self$eps[end1.id, shock.id]
+        Phi.used <- self$IRF[res.id, shock.id, 1]
+        HDC.ij <- Phi.used * eps.used
+        return(HDC.ij)
       }
     }
   ),
@@ -140,16 +165,19 @@ VAR <- R6Class(
       }
       return(FEVD)
     },
-    HDC.compute = function(start, end, shock, response, eps = self$eps, IRF = self$IRF) {
-      # TODO add error handler for time period
-      s.id <- which(self$time == start)
-      e.id <- which(self$time == end)
+    HDC.core = function(end = NA_integer_, shock = NA_character_, res = NA_character_) {
+      # ensure 'end' is an id
       shock.id <- which(self$var.names == shock)
-      res.id <- which(self$var.names == response)
-      cumsum.1 <- IRF[res.id, shock.id, (e.id - self$p.lag):1] %*% eps[(self$p.lag + 1):e.id, res.id]
-      cumsum.2 <- IRF[res.id, shock.id, (s.id - self$p.lag):1] %*% eps[(self$p.lag + 1):s.id, res.id]
-      HD.value <- cumsum.1 - cumsum.2
-      return(HD.value)
+      res.id <- which(self$var.names == res)
+      violation <- (identical(shock.id, integer(0)) | identical(res.id, integer(0)))
+      if (violation) {
+        stop("Please give appropriate variable names")
+      } else {
+        eps.used <- rev(self$eps[1:end, shock.id])
+        Phi.used <- self$IRF[res.id, shock.id, 1:end]
+        HDC.ijt <- Phi.used %*% eps.used
+        return(HDC.ijt)
+      }
     }
   )
 )
