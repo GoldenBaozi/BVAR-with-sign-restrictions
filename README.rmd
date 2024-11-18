@@ -1,4 +1,13 @@
-# Estimation and Inference of VAR with Bayesian methods
+---
+title: "Estimation and Inference of VAR with Bayesian methods"
+author: "Jincheng Jiang"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+    toc: true
+---
 
 - [x] basic VAR, OLS Estimation
 - [x] IRF, FEVD, HDC and plots
@@ -185,10 +194,8 @@ $$
 
 which means the likelihood function is (conditionally) proportional to the product of **a normal distribution** for $\alpha$ and **a inverse-Wishart distribution** for $\Sigma$. It seems that we can sample the parameters independently from the posterior density using **Gibbs Sampler**, if we use appropriate priors. 
 
----
-By the way, I find a code snippet to generate random draws from inverse-Wishart distribution from [this package](https://rdrr.io/cran/nicheROVER/src/R/rwish.R), which should be easily transformed to `Rcpp` code.
 
----
+> By the way, I find a code snippet to generate random draws from inverse-Wishart distribution from [this package](https://rdrr.io/cran/nicheROVER/src/R/rwish.R), which should be easily transformed to `Rcpp` code.
 
 In fact it is the case if we use the Normal-inverse-Wishart Prior, which specifies the priors of $\alpha$ and $\Sigma$ to be **independently normal and inverse-Wishart**. The result is as follow:
 
