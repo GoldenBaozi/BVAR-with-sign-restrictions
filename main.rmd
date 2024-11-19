@@ -9,16 +9,17 @@ output:
     toc: true
 ---
 
-- [x] basic VAR, OLS Estimation
-- [x] IRF, FEVD, HDC and plots
-- [ ] identification via recursive and IV approach (soon...)
-- [ ] inference via bootstrap (optional, not required with bayesian method)
-- [ ] bayesian VAR
-- [ ] identification via narrative sign restrictions (Antolín-Díaz and Rubio-Ramírez, 2018) with bayesian method, if time permits
-- [ ] testing on examples (SW 2001, A and R 2018, etc.)
-- [ ] R package
+this post won't exist without these resources:
 
-## A reduced form Bayesian VAR
+- Antolín-Díaz, Juan, and Juan F. Rubio-Ramírez. 2018. "Narrative Sign Restrictions for SVARs." American Economic Review, 108 (10): 2802–29.
+- [Bayesian Macroeconometrics in R](https://github.com/kthohr/BMR)
+- Juan F. Rubio-Ramírez, Daniel F. Waggoner, Tao Zha. 2010. "Structural Vector Autoregressions: Theory of Identification and Algorithms for Inference." The Review of Economic Studies, 77(2): 665–696.
+- Kilian L, Lütkepohl H. "Structural Vector Autoregressive Analysis." Cambridge University Press, 2017.
+- Yifei Lyu's lecture notes
+
+Great Thanks!
+
+## A reduced form VAR
 
 Let's consider a m-dimension VAR(p) model:
 
@@ -109,7 +110,7 @@ $$
 
 this is done in the R code.
 
-## Estimation VAR via Bayesian method
+## Estimating via Bayesian method
 
 Why do we bother to use bayesian method where OLS would simply solve the problem? Because bayesian method would be of great help if we want to do inference, which I will talk about below. Here I first outline the basic idea of bayesian method (mainly from [this author's github repo](https://github.com/kthohr/BMR) and his book).
 
@@ -119,7 +120,7 @@ $$
 y = (\mathbb{I}_{m} \otimes X) \alpha + \varepsilon \tag{3}
 $$
 
-where $y=\text{vec}(Y)$, $\alpha=\text{vec}(\beta)$, $\varepsilon=\text{vec}(\epsilon) \sim \mathcal{N}(0, \Sigma \otimes \mathbb{I}_{m})$ are all of dimension $(m \times T) \times 1$ (in fact it should be $(m \times (T-lag)) \times 1$, for convenience I write $T$). Here $\text{vec}$ means to stack the matrix vertically by column and $\otimes$ means the Kronecker product. In R, it can be done by `matlib::vec` and `%x%`. Note $\mathbb{I}_{m}$ is the m-dimension identity matrix.
+where $y=\text{vec}(Y)$, $\alpha=\text{vec}(\beta)$, $\varepsilon=\text{vec}(\epsilon) \sim \mathcal{N}(0, \Sigma \otimes \mathbb{I}_{m})$ are all of dimension $(m \times T) \times 1$ (in fact it should be $(m \times (T-lag)) \times 1$, for convenience I write $T$). Here $\text{vec}$ means to stack the matrix vertically by column and $\otimes$ means the Kronecker product. In R, it can be done by `as.vector` and `%x%`. Note $\mathbb{I}_{m}$ is the m-dimension identity matrix.
 
 Again, we illustrate (3) using the VAR(2) example, it says
 
@@ -197,7 +198,7 @@ which means the likelihood function is (conditionally) proportional to the produ
 
 > By the way, I find a code snippet to generate random draws from inverse-Wishart distribution from [this package](https://rdrr.io/cran/nicheROVER/src/R/rwish.R), which should be easily transformed to `Rcpp` code.
 
-In fact it is the case if we use the Normal-inverse-Wishart Prior, which specifies the priors of $\alpha$ and $\Sigma$ to be **independently normal and inverse-Wishart**. The result is as follow:
+In fact it is the case if we use the independent Normal-inverse-Wishart Prior, which specifies the priors of $\alpha$ and $\Sigma$ to be **independently normal and inverse-Wishart**. The result is as follow:
 
 First, use bayesian formula we know the joint posterior distribution satisfies
 
@@ -274,8 +275,7 @@ $$
 
 where we normalize $D=\mathbb{I}_{m}$ to work with 1-unit-standard-error shock. Note we have $m\times m$ entries in $\mathcal{B}$ to estimate while the equality just give us $m(m-1)/2$ equations, this $\mathcal{B}$ is not identified, i.e. we lack enough assumptions to identify $\mathcal{B}$ matrix.
 
-A possible solution is setting $\mathcal{B}$ to be lower triangle, which requires $b_{ij}=0$ if $i<j$. This assumption is widely used in old times because it's easy to implemented and has straightforward economic meaning: variable 1 won't affected by shock 2 to last in the short run, variable 2 won't affected by shock 3 to last in the shprt run, and so on.
-But recently people find this assumption might be too strong and may not be realistic.
+A possible solution is setting $\mathcal{B}$ to be lower triangle, which requires $b_{ij} = 0$ if $i < j$. This assumption is widely used in old times because it's easy to implemented and has straightforward economic meaning: variable 1 won't affected by shock 2 to last in the short run, variable 2 won't affected by shock 3 to last in the short run, and so on. But recently people find this assumption might be too strong and may not be realistic.
 
 Another solution is using IV, which heavily relies on accessible data but easy to implement. It not the focus of this project.
 
@@ -293,8 +293,91 @@ To do inference, with frequentist methods we bootstrap on $\epsilon_{t}$ to reco
 
 ## Sign Restrictions
 
-TODO
-
 ### Basics
 
+Traditional sign restrictions don't set entries of $\mathcal{B}$ matrix to certain values. Instead, it utilize economic theories to restrict the sign of entries of $\mathcal{B}$ matrix to be positive, negative, or zero. For example, consider the bi-variate VAR(2) model
+
+$$
+\begin{bmatrix} 
+    y_{t} \\
+    \pi_{t} 
+\end{bmatrix} = \begin{bmatrix} 
+    \alpha_{0} \\
+    \beta_{0} 
+\end{bmatrix} + \begin{bmatrix} 
+    \alpha_{11} & \alpha_{12} \\
+    \beta_{21} & \beta_{22}
+\end{bmatrix} \begin{bmatrix} 
+    y_{t-1} \\
+    \pi_{t-1}
+\end{bmatrix} + \begin{bmatrix} 
+    \alpha_{21} & \alpha_{22} \\
+    \beta_{21} & \beta_{22}
+\end{bmatrix} \begin{bmatrix} 
+    y_{t-2} \\
+    \pi_{t-2} 
+\end{bmatrix} + \mathcal{B} \begin{bmatrix} 
+    \xi_{t}^{y}\\
+    \xi_{t}^{\pi}
+\end{bmatrix}
+$$
+
+Business cycle theory tells us, faced with demand shocks, inflation should move with the same direction of demand shock. That is, $\pi_{t} \uparrow \uparrow xi_{t}^{y}$. Thus, we can add sign restrictions to $\mathcal{B}$ matrix like
+
+$$
+\mathcal{B} \leftarrow \begin{bmatrix} 
+    \cdot & \cdot \\
+    + & \cdot 
+\end{bmatrix} 
+$$
+
+Which is very general and can be realistic. Adding restrictions to matrix $\mathcal{B}$ is actually equivalent to **adding restrictions to zero-order IRF** $\Phi^{0}$, of course we can add restrictions to higher orders of IRFs to restrict the (relatively) long run effect of certain shocks on any variables.
+
+The problem of sign restrictions is that it's difficult to implement. RUBIO-RAM´ IREZ et al.(2010) gives an algorithm to get a set of $\mathcal{B}$ matrix with sigh restrictions, which is based on the fact that matrix $\mathcal{B}$ must satisfy
+
+$$
+\Sigma = \mathcal{B} \mathcal{B}'
+$$
+
+which is a necessary condition for true $\mathcal{B}$. Also, use Cholesky decomposition we can get
+
+$$
+\Sigma = P P'
+$$
+
+where $P$ is a **lower triangular** matrix. We can prove that $\mathcal{B}$ must equal $P$ multiplies some orthogonal matrix $Q$, where $Q Q' = \mathbb{I}$. That is 
+
+$$
+\text{if} \quad \Sigma = PP', \text{then} \quad \Sigma=\mathcal{B} \mathcal{B}' \iff \mathcal{B} = PQ
+$$
+
+**Proof**. $\implies$: $\mathcal{B} \mathcal{B}' = PP' \implies P^{-1}\mathcal{B} \mathcal{B}' P'^{-1}=\mathbb{I}
+$
+
+let $P^{-1}\mathcal{B}=Q$, we know $Q Q'= \mathbb{I}$, and $\mathcal{B}=PQ$. Just note that $P$ is triangular and thus invertible.
+
+$\impliedby$: $B = PQ \implies \mathcal{B} \mathcal{B}' = PQ Q' P' = PP' = \mathbb{I}
+$ and we are done.
+
+This result tells us if we find a set of appropriate orthogonal matrix $Q$, then we can get a set of matrix $\tilde{\mathcal{B}}$ which may contain the true $\mathcal{B}$. Here is how the algorithm do:
+
+1. Draw $\alpha$ and $\Sigma$ from posterior distribution, do Cholesky decomposition on $\Sigma$ to get $P$
+2. Generate an $n \times n$ matrix $X$ with all entries $\sim \mathcal{N}(0,1)$ iid.
+3. Do QR decomposition on $X$, get $X=QR$, where $Q$ is orthogonal and $R$ is upper triangular.
+4. Get "one draw" of $\tilde{\mathcal{B}}=PQ$
+5. Check whether $\tilde{\mathcal{B}}$ of IRF generated by it satisfies sign restriction, if yes, save this draw, if no, back to step 1.
+6. Repeat 1-5, until the number of saved draws equal the number of draws you desire.
+
+There are two points well notable:
+
+- With sign restrictions we only yield set identify, that is, we don't identify an exact $\mathcal{B}$ matrix, instead we get a set of $\mathcal{B}$ and thus a set of IRF. Then we plot the 5% and 95% quantiles of IRF and use the median or mean of IRF to mimic a point estimation.
+- About matrix $Q$. If $Q$ is generated from QR decomposition of a iid. normal matrix, then Q satisfies a [Haar distribution](https://nhigham.com/2020/04/22/what-is-a-random-orthogonal-matrix/), which means it's probability measure may be "biased" when we compute IRF (containing power terms of $Q$). Hence, frequentists' "random draw" methodology may not be valid during this process, we'd better turn to bayesian methods to utilize this "belief".
+
 ### Narrative Sign Restrictions
+
+Antolín-Díaz and Rubio-Ramírez (2018) combines sigh restriction with historical facts. They impose restrictions not only on structural parameters and IRFs, but also on historical decomposition (HD), i.e. the cumulative effect of shock $i$ on variable $j$ during certain period. In their article they use two kind of such restrictions:
+
+- Type A: a given shock was **the most important (least important) driver** of the unexpected change in a variable during some periods. That is, **the absolute value of the HD of this shock is the largest (smallest)** during some periods.
+- Type B: a given shock was **the overwhelming (negligible) driver** of the unexpected change in a given variable during the period. That is, the absolute value of its HD is larger (smaller) than **the sum of** HDs of all other structural shocks
+
+Note that to check narrative sign restrictions, we need HD and thus estimated structural shocks $\xi_{t}$, which should be computed by $\mathcal{B}(Y-\beta X)$ with a drawn $\mathcal{B}$. This should not be difficult once the procedure of computing bayesian estimator, IRF and HD are well implemented.
