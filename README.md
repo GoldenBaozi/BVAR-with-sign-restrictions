@@ -9,4 +9,6 @@
 - [ ] testing on examples (SW 2001, AR 2018, etc.)
 - [ ] R package
 
+The sign restriction procedure cannot be vectorized, must put it in Rcpp !!
+
 For detailed illustration, see https://goldenbaozi.github.io/BayesVAR.html

@@ -1,0 +1,6 @@
+compare gibbs sampling R and Rcpp:
+
+Unit: seconds
+      expr    min    lq  mean median    uq   max neval
+   gibbs R 47.061 47.30 55.51  47.47 53.74 92.73    10
+ gibbs Cpp  5.077  5.17 11.46  10.22 18.52 19.34    10
