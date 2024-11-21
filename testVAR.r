@@ -2,6 +2,10 @@ library(Rcpp)
 library(RcppArmadillo)
 library(microbenchmark)
 
+sourceCpp("./src/VARtools.cpp")
+sourceCpp('./src/BVARdraw.cpp')
+source("./scripts/VARclass.R")
+
 plag <- 4
 hor <- 24
 sample_start <- "1960q1"
@@ -104,3 +108,20 @@ rwish(1, bvar.out.c$Sigma_mean_post, bvar.out.c$nu_post, TRUE)
 
 # test time
 microbenchmark("gibbs R" = gsampler(VAR.ols$Y, VAR.ols$X, priors), "gibbs Cpp" = gibbs_sampler(VAR.ols$Y, VAR.ols$X, priors), times = 10)
+
+sourceCpp("./src/test.cpp")
+out <- test_vec()
+
+# test apply on IRF use `apply(., c(1,2), func)`
+matx <- matrix(1:15, 3, 5, byrow = TRUE)
+arr <- array(matx, dim = c(3, 5, 3))
+arr
+mean_rows <- apply(arr, c(1, 2), mean)
+mean_rows
+
+arr[, , 3] <- - arr[, , 3]
+min_rows <- apply(arr, c(1,2), function(x) quantile(x, probs = 0.05))
+
+# test BVAR class
+
+

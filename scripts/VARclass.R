@@ -1,8 +1,11 @@
 library(R6)
 library(expm)
+library(Rcpp)
+library(RcppArmadillo)
+library(tictoc)
 # TODO add bootstrap of IRF
 VAR <- R6Class(
-  "VAR",
+  "basic VAR",
   public = list(
     T = NULL,
     T.est = NULL,
@@ -41,17 +44,12 @@ VAR <- R6Class(
       self$X <- cbind(rep(1, self$T.est), Y.lag)
       self$Y.start <- self$data[1:(self$T - p.lag), ]
       cat("* VAR class initialized.\n")
-      cat("-> variables: ", self$var.names, "\n")
-      cat("-> time period: ", self$time[1], " to ", self$time[self$T], "\n")
-    },
-    fit = function(method = "OLS") {
-      if (method == "OLS") {
-        # TODO check the OLS problem is appropriate
-        self$beta <- private$est.OLS()
-        self$U <- self$Y - self$X %*% self$beta
-        self$Sigma <- t(self$U) %*% self$U / (self$T.est - self$n.var - 1)
-      }
-      cat("* parameters of VAR estimated using ", method, ", residual and Cov matrix yield.\n")
+      cat("-> variables: ", paste0(self$var.names, collapse = ", "), "\n")
+      cat("-> time period: ", as.character(self$time[1]), " to ", as.character(self$time[self$T]), "\n")
+      self$beta <- solve(t(self$X) %*% self$X, t(self$X) %*% self$Y)
+      self$U <- self$Y - self$X %*% self$beta
+      self$Sigma <- t(self$U) %*% self$U / (self$T.est - self$n.var - 1)
+      cat("* reduced form VAR estimated using OLS.\n")
     },
     identify = function(method = "recursive", IV = NA) {
       # TODO add IV and sign identification methods
@@ -63,108 +61,48 @@ VAR <- R6Class(
       cat("* model identified using ", method, " approach.\n")
     },
     IRF.compute = function(beta = self$beta, B = self$B, hor = self$hor, boot = FALSE) {
-      nvar <- self$n.var
-      plag <- self$p.lag
-      beta.1 <- t(beta)
-      beta.lag <- beta.1[, 2:(nvar * plag + 1)]
-      beta.compact <- rbind(beta.lag, cbind(diag(nvar * (plag - 1)), matrix(0, (plag - 1) * nvar, nvar)))
-      Psi <- array(0, c(nvar, nvar, hor + 1))
-      irf_trans <- cbind(diag(nvar), matrix(0, nvar, nvar * (plag - 1)))
-      if (boot == FALSE) {
-        IRF <- array(0, c(nvar, nvar, hor + 1))
-        for (h in 1:(hor + 1)) {
-          Psi[, , h] <- irf_trans %*% (beta.compact %^% (h - 1)) %*% t(irf_trans)
-          IRF[, , h] <- Psi[, , h] %*% B
-        }
-        return(
-          list(
-            "Psi" = Psi,
-            "IRF" = IRF
-          )
-        )
-      } else {
-        for (h in 1:(hor + 1)) {
-          Psi[, , h] <- irf_trans %*% (beta.compact %^% (h - 1)) %*% t(irf_trans)
-        }
-        return(Psi)
+      #' @return IRF.list$Psi, IRF.list$IRF, 3-D array
+      if (!boot) {
+        IRF.list <- IRF_compute(beta, B, hor, self$n.var, self$p.lag)
+        return(IRF.list)
       }
     },
-    FEVD.compute = function(Sigma = self$Sigma, B = self$B, Psi = self$Psi) {
-      # initialize variables
-      nvar <- self$n.var
-      nstep <- self$hor + 1
-      MSE <- array(0, c(nvar, nvar, nstep))
-      MSE_shock <- array(0, c(nvar, nvar, nstep))
-      FEVD <- array(0, c(nvar, nvar, nstep))
-      # calculate FEVD
-      for (mm in 1:nvar) {
-        MSE[, , 1] <- Sigma
-        MSE_shock[, , 1] <- B[, mm] %*% t(B[, mm])
-        for (kk in 2:nstep) {
-          MSE[, , kk] <- MSE[, , kk - 1] + Psi[, , kk] %*% Sigma %*% t(Psi[, , kk])
-          MSE_shock[, , kk] <- MSE_shock[, , kk - 1] + Psi[, , kk] %*% MSE_shock[, , 1] %*% t(Psi[, , kk])
-          FEVD[, mm, kk] <- diag(MSE_shock[, , kk]) / diag(MSE[, , kk])
-        }
-      }
+    FEVD.compute = function(Sigma = self$Sigma, B = self$B, Psi = self$Psi, hor = self$hor) {
+      #' @return FEVD 3-D array
+      FEVD <- FEVD_compute(Sigma, B, Psi, self$n.var, hor)
       return(FEVD)
     },
-    HDC.core = function(end = NA_integer_, shock = NA_character_, res = NA_character_) {
-      # ensure 'end' is an id
+    HDC.compute = function(start = NA_character_, end = NA_character_, shock = NA_character_, res = NA_character_) {
+      #' @return a matrix of (end-start) x 1
       shock.id <- which(self$var.names == shock)
       res.id <- which(self$var.names == res)
-      violation <- (identical(shock.id, integer(0)) | identical(res.id, integer(0)))
-      if (violation) {
-        stop("Please give appropriate variable names")
-      } else {
-        eps.used <- rev(self$eps[1:end, shock.id])
-        Phi.used <- self$IRF[res.id, shock.id, 1:end]
-        HDC.ijt <- Phi.used %*% eps.used
-        return(HDC.ijt)
-      }
-    },
-    HDC.compute = function(end1 = NA_character_, end2 = NA_character_, shock = NA_character_, res = NA_character_) {
-      end1.id <- which(self$time[(self$p.lag + 1):self$T] == end1)
-      end2.id <- which(self$time[(self$p.lag + 1):self$T] == end2)
-      violation <- (identical(end1.id, integer(0)) | identical(end2.id, integer(0)) | end1.id > end2.id)
-      if (violation) {
-        stop("Please set appropriate time periods")
-      } else if (end2.id > end1.id) {
-        HDC.ij <- vector("numeric", (end2.id - end1.id))
-        for (t in (end1.id + 1):end2.id) {
-          HDC.ij[(t - end1.id)] <- private$HDC.core(t, shock, res) - private$HDC.core(end1.id, shock, res)
-        }
-        return(HDC.ij)
-      } else {
-        shock.id <- which(self$var.names == shock)
-        res.id <- which(self$var.names == res)
-        eps.used <- self$eps[end1.id, shock.id]
-        Phi.used <- self$IRF[res.id, shock.id, 1]
-        HDC.ij <- Phi.used * eps.used
-        return(HDC.ij)
-      }
+      start.id <- which(self$time == start) - self$p.lag
+      end.id <- which(self$time == end) - self$p.lag
+      HDC <- HDC_ts(start.id, end.id, shock.id, res.id, self$IRF, self$eps)
+      return(HDC)
     },
     tools = function(boot = FALSE) {
       cat("* computing structural VAR tools ...\n")
       IRF.res <- self$IRF.compute(boot = boot)
       self$Psi <- IRF.res$Psi
       self$IRF <- IRF.res$IRF
-      cat("-> IRF computed.\n")
+      cat("-> IRF computed for ", self$hor, " horizons.")
       self$FEVD <- self$FEVD.compute()
-      cat("-> FEVD computed.")
+      cat("-> FEVD computed for", self$hor, " horizons.")
     },
     IRF.plot = function(shock = NA_character_, response = NA_character_, hor = self$hor, CI = FALSE) { # by default plot the whole horizon
       shock.id <- which(self$var.names == shock)
       res.id <- which(self$var.names == response)
-      violation <- (identical(shock.id, integer(0)) | identical(res.id, integer(0)))
-      if (violation) {
-        stop("Please give appropriate variable names")
-      }
+      # violation <- (identical(shock.id, integer(0)) | identical(res.id, integer(0)))
+      # if (violation) {
+      #   stop("Please give appropriate variable names")
+      # }
       irf.to.plot <- self$IRF[res.id, shock.id, 1:(hor + 1)]
       x <- 0:hor
-      if (hor > self$hor) {
-        msg <- paste("horizon >", self$hor, "not allowed")
-        stop(msg)
-      }
+      # if (hor > self$hor) {
+      #   msg <- paste("horizon >", self$hor, "not allowed")
+      #   stop(msg)
+      # }
       plot(x, irf.to.plot,
         type = "l",
         lty = 1, lwd = 2, col = 4,
@@ -196,60 +134,100 @@ bVAR <- R6Class(
     alpha.post = NULL,
     Sigma.post = NULL,
     # parameter draws
-    alpha.draw = NULL, ## vector of beta
     beta.draw = NULL, ## matrix of alpha
     Sigma.draw = NULL, ## cov of Y-X \times beta, used for cholesky decomposition
+    B.draw = NULL,
     # related non-orthogonal/orthogonal shocks and IRFs
-    u.draw = NULL, ## Y - X \times \beta
-    eps.draw = NULL, ## B^{-1} u
-    Psi.draw = NULL,
     IRF.draw = NULL,
-    initialize = function(data = NA, p.lag = NA, prior.type = "independent", priors = NA) {
+    # statistics of IRF
+    IRF.avg = NULL,
+    IRF.ub = NULL,
+    IRF.lb = NULL,
+    initialize = function(data = NA, p.lag = NA, prior.type = "info", priors = NA) {
       # need to check data and p.lag input
       super$initialize(data, p.lag)
       self$prior.type <- prior.type
-      if (prior.type == "independent") {
-        if (is.na(priors)) {
-          alpha.prior <- list(
-            "mean" = as.vector(t(cbind(rep(0, self$n.var), diag(n.var), matrix(0, self$n.var, self$n.var * (self$p.lag - 1))))),
-            "cov" = 0.1 * diag(self$n.var * (self$n.var * self$p.lag + 1))
-          )
-          Sigma.prior <- list(
-            "mean" = diag(self$n.var),
-            "nu" = self$n.var + 1
-          )
-        } else {
-          alpha.prior <- list(
-            "mean" = priors[[1]],
-            "cov" = priors[[2]]
-          )
-          Sigma.prior <- list(
-            "mean" = priors[[3]],
-            "nu" = priors[[4]]
-          )
-        }
+      if (!is.na(priors)) {
+        self$alpha.prior <- list(
+          "mean" = priors[[1]],
+          "cov" = priors[[2]]
+        )
+        self$Sigma.prior <- list(
+          "mean" = priors[[3]],
+          "nu" = priors[[4]]
+        )
+        self$prior.type <- "user"
+      } else if (prior.type == "flat") {
+        self$alpha.prior <- list(
+          "mean" = as.vector(t(cbind(rep(0, self$n.var), diag(n.var), matrix(0, self$n.var, self$n.var * (self$p.lag - 1))))),
+          "cov" = 0.1 * diag(self$n.var * (self$n.var * self$p.lag + 1))
+        )
+        self$Sigma.prior <- list(
+          "mean" = diag(self$n.var),
+          "nu" = self$n.var + 1
+        )
+      } else if (prior.type == "info") {
+        self$alpha.prior <- list(
+          "mean" = as.vector(self$beta),
+          "cov" = 0.1 * diag(self$n.var * (self$n.var * self$p.lag + 1))
+        )
+        self$Sigma.prior <- list(
+          "mean" = self$Sigma,
+          "nu" = self$n.var + 1
+        )
+      } else {
+        stop("please follow the instructions to set priors")
       }
-      # TODO other priors, e.g. conjugate
     },
-    est = function(Y = self$Y, X = self$X, prior.type = self$prior.type, burn.in = 100, draw = 1000, thin = 1, post.save = NA, post.method = "last") {
-      if (prior.type == "independent") {
-        y <- as.vector(Y)
+    est = function(Y = self$Y, X = self$X, method = "gibbs", burn.in = 100, draw = 1000, thin = 1, post.save = NA, post.method = 0) {
+      if (method == "gibbs") {
+        if (is.na(post.save)) post.save <- draw / 2
         priors <- c(self$alpha.prior, self$Sigma.prior)
-        cat("Gibbs sampler start...\n")
-        res <- gsampler(y, Y, X, priors, burn.in = burn.in, draw = draw, thin, usage = "sign", post.save = post.save, post.method = post.method)
+        cat("* Gibbs sampler start...\n")
+        tic("Gibbs sampler time usage")
+        out <- private$gibbs.sampler(Y, X, priors, burn.in, draw, thin, post.save, post.method)
+        toc()
         ## save posterior parameters
-        self$alpha.post <- list("mean" = out$alpha.mean.post, "cov" = out$alpha.cov.post)
-        self$Sigma.post <- list("mean" = out$Sigma.mean.post, "nu" = out$nu.post)
+        self$alpha.post <- list("mean" = out$alpha_mean_post, "cov" = out$alpha_cov_post)
+        self$Sigma.post <- list("mean" = out$Sigma_mean_post, "nu" = out$nu_post)
         ## temporally save parameters estimated, if not using sign restrictions
         self$beta <- matrix(rowMeans(out$alpha), self$n.var * self$p.lag + 1, self$n.var)
         self$Sigma <- apply(out$Sigma, c(1, 2), mean)
-        cat("posterior parameters estimated.") # TODO add a supervisor, and other priors
-        ## return loglik for analysis
+        cat("* posterior parameters estimated using ", method, " method.") # TODO add other priors
+        ## return loglik for potential analysis
         return(out$loglik)
+      }
+      # other method, like conjugate
+    },
+    identify = function(method = "sign", SR = NA, EBR = NA, NSR = NA, draw = 1000, save = 1000, M = 100, hor = self$hor, IV = NA) {
+      if (method == "recursive" | method == "IV") {
+        super$identify(method, IV)
+      } else if (method == "sign") {
+        restrictions <- private$get.restrictions(SR, EBR, NSR)
+        cat("* restrictions get.")
+        tic("Sign restriction identification time usage")
+        sign.out <- private$sign.identify(restrictions, draw, M, save, hor)
+        toc()
+        # save drawn structural parameters and IRFs
+        self$beta.draw <- sign.out$beta_saved
+        self$B.draw <- sign.out$B_saved
+        self$Sigma.draw <- sign.out$Sigma_saved
+        self$IRF.draw <- sign.out$IRF_saved
+        cat("* model identified via sign restrictions approach.\n")
+        self$IRF.avg <- apply(self$IRF.draw, c(1, 2), median)
+        self$IRF.ub <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = 0.95))
+        self$IRF.lb <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = 0.05))
+        cat("* IRF credible set and median estimation yield.")
+      } else {
+        stop("Please set appropriate identify method!")
       }
     }
   ),
   private = list(
+    gibbs.sampler = function(Y, X, priors, burn.in, draw, thin, post.save, post.method) {
+      out <- gibbs_sampler(Y, X, priors, burn.in, draw, thin, post.save, post.method)
+      return(out)
+    },
     get.restrictions = function(SR = NA, EBR = NA, NSR = NA) {
       restrictions <- list()
       if (!is.na(SR)) {
@@ -322,9 +300,11 @@ bVAR <- R6Class(
           }
         }
       }
+      return(restrictions)
+    },
+    sign.identify = function(restrictions, draw, M, save, hor) {
+      out <- sign_restrictions_main(self$alpha.post, self$Sigma.post, restrictions, self$Y, self$X, draw, self$p.lag, hor, M, save)
+      return(out)
     }
-    # draw.1 = function() {
-
-    # }
   )
 )

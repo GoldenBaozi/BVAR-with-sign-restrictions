@@ -99,10 +99,10 @@ List gibbs_sampler(mat Y, mat X, List priors, int burn_in = 100, int draw = 1000
     alpha_draw alpha_out;
     Sigma_draw Sigma_out;
 
-    // first draw
+    // first draw and supervisor
     vec alpha = mvnrnd(alpha_bar, Sigma_alpha);
     mat Sigma = iwishrnd(Sigma_sigma, nu);
-
+    int report = draw / 10;
     // burn in
     for (int i = 0; i < burn_in; i++)
     {
@@ -123,6 +123,9 @@ List gibbs_sampler(mat Y, mat X, List priors, int burn_in = 100, int draw = 1000
         alpha_draws.col(i) = alpha;
         Sigma_draws.slice(i) = Sigma;
         loglik_draws(i) = loglik(Sigma, alpha, y, X, m, T_est);
+        if (i % report == 0) {
+            Rcout << i << " samples drawn from Gibbs sampler.\n";
+        }
         if (i >= (draw - post_save))
         {
             int k = i - post_save;
