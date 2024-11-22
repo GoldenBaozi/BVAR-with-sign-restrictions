@@ -96,6 +96,7 @@ vec HDC_ts(int start, int end, int shock, int res_var, cube IRF, mat eps) {
     return HDC_ts;
 }
 
+// [[Rcpp::export]]
 mat flatten_cube(cube obj) {
     int hor = obj.n_slices;
     int nvar = obj.n_rows;
@@ -137,6 +138,7 @@ bool check_all_restrictions(List restrictions, cube IRF, mat eps) {
             double lb = as<double>(res_1[6]);
             mat IRF_test = IRF.slice(hor);
             double EBR_test = IRF_test(var_1, shock) / IRF_test(var_2, shock);
+            // Rcout << mb << " " << lb << " " << EBR_test << "\n";
             if (EBR_test <= mb && EBR_test >= lb) { flag++; }
         }
         else
@@ -153,6 +155,7 @@ bool check_all_restrictions(List restrictions, cube IRF, mat eps) {
             }
             else
             {
+                // here I don't set shock = ...-1, because the function HDC_ts will do this, to avoid messy
                 int shock = as<int>(res_1[2]);
                 int var = as<int>(res_1[3]);
                 int nvar = eps.n_cols;
@@ -167,15 +170,18 @@ bool check_all_restrictions(List restrictions, cube IRF, mat eps) {
                     HDC_test.col(i) = HDC_ts(start, end, i + 1, var, IRF, eps);
                 }
                 mat HDC_target = repmat(HDC_test.col(shock-1), 1, nvar);
-                mat test = HDC_test - HDC_target;
-                bool cond1 = all(vectorise(test) >= 0);
-                bool cond2 = all(vectorise(test) <= 0);
-                if ((inten == "strong" && cond1) || (inten == "weak" && cond2)) {
+                mat test_sign = HDC_test.col(shock-1)*sign;
+                mat test_inten = abs(HDC_test) - abs(HDC_target);
+                bool cond0 = all(vectorise(test_sign) >= 0);
+                bool cond1 = all(vectorise(test_inten) >= 0);
+                bool cond2 = all(vectorise(test_inten) <= 0);
+                if ((inten == "strong" && cond0 && cond1) || (inten == "weak" && cond0 && cond2)) {
                     flag++;
                 }
             }
         }
     }
+    // Rcout << flag << "\n";
     bool out = (flag == n);
     return out;
 }
@@ -202,6 +208,7 @@ bool check_NSR(List restrictions, cube IRF, mat eps) {
             }
             else
             {
+                // here I don't set shock = ...-1, because the function HDC_ts will do this, to avoid messy
                 int shock = as<int>(res_1[2]);
                 int var = as<int>(res_1[3]);
                 int nvar = eps.n_cols;
@@ -216,10 +223,12 @@ bool check_NSR(List restrictions, cube IRF, mat eps) {
                     HDC_test.col(i) = HDC_ts(start, end, i + 1, var, IRF, eps);
                 }
                 mat HDC_target = repmat(HDC_test.col(shock-1), 1, nvar);
-                mat test = HDC_test - HDC_target;
-                bool cond1 = all(vectorise(test) >= 0);
-                bool cond2 = all(vectorise(test) <= 0);
-                if ((inten == "strong" && cond1) || (inten == "weak" && cond2)) {
+                mat test_sign = HDC_test.col(shock-1)*sign;
+                mat test_inten = abs(HDC_test) - abs(HDC_target);
+                bool cond0 = all(vectorise(test_sign) >= 0);
+                bool cond1 = all(vectorise(test_inten) >= 0);
+                bool cond2 = all(vectorise(test_inten) <= 0);
+                if ((inten == "strong" && cond0 && cond1) || (inten == "weak" && cond0 && cond2)) {
                     flag++;
                 }
             }
@@ -233,7 +242,7 @@ bool check_NSR(List restrictions, cube IRF, mat eps) {
 }
 
 double compute_importance_weight(List restrictions, cube IRF, int M, int row, int col) {
-    int satisfy = 0;
+    int satisfy = 1; // to avoid zero weight
     for (int i = 0; i < M; i++)
     {
         mat eps_v = randn(row, col);
@@ -242,7 +251,7 @@ double compute_importance_weight(List restrictions, cube IRF, int M, int row, in
             satisfy++;
         }
     }
-    double weight = 1.0 / (satisfy / M);
+    double weight = 1.0 / (satisfy*1.0 / M);
     return weight;
 }
 
@@ -254,7 +263,7 @@ List sign_restrictions_main(List alpha_post, List Sigma_post, List restrictions,
     cube B_draw(nvar, nvar, draw);
     cube beta_draw(nvar*plag+1, nvar, draw);
     cube Sigma_draw(nvar, nvar, draw);
-    cube IRF_draw(nvar*nvar, hor, draw);
+    cube IRF_draw(nvar*nvar, hor+1, draw);
     vec weights(draw);
     // unpack priors
     vec alpha_post_mean = as<vec>(alpha_post[0]);
@@ -277,8 +286,8 @@ List sign_restrictions_main(List alpha_post, List Sigma_post, List restrictions,
         qr(Q, R, X);
         Q = Q * diagmat(sign(R.diag()));
         mat B_1draw = P * Q;
-        mat B_inv_1draw = inv(B_1draw);
-        mat eps_1draw = u_1draw * B_inv_1draw.t();
+        mat B_inv_1draw = inv(trans(B_1draw));
+        mat eps_1draw = u_1draw * B_inv_1draw;
         cube IRF_1draw = IRF_compute_1(beta_1draw, B_1draw, hor, nvar, plag);
         // check sign restrictions, to decide save or not
         bool save_me = check_all_restrictions(restrictions, IRF_1draw, eps_1draw);
@@ -287,8 +296,10 @@ List sign_restrictions_main(List alpha_post, List Sigma_post, List restrictions,
             B_draw.slice(flag) = B_1draw;
             beta_draw.slice(flag) = beta_1draw;
             Sigma_draw.slice(flag) = Sigma_1draw;
-            IRF_draw.slice(flag) = flatten_cube(IRF_1draw);
+            // Rcout << IRF_1draw.n_slices << "\n";
+            IRF_draw.slice(flag) = flatten_cube(IRF_1draw); // problem
             weights(flag) = compute_importance_weight(restrictions, IRF_1draw, M, T_est, nvar);
+            // Rcout << weights(flag) <<"\n";
             flag++;
             if (flag % report == 0) {
                 Rcout << "-> " << flag << " draws saved.\n";
@@ -306,7 +317,7 @@ List sign_restrictions_main(List alpha_post, List Sigma_post, List restrictions,
     NumericVector new_id = sample(xx, save, true, my_weights);
     uvec save_id = as<uvec>(new_id);
     cube B_saved = B_draw.slices(save_id);
-    cube beta_saved = beta_saved.slices(save_id);
+    cube beta_saved = beta_draw.slices(save_id);
     cube Sigma_saved = Sigma_draw.slices(save_id);
     cube IRF_saved = IRF_draw.slices(save_id);
 

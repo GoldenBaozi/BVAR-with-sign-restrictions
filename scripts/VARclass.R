@@ -46,6 +46,7 @@ VAR <- R6Class(
       cat("* VAR class initialized.\n")
       cat("-> variables: ", paste0(self$var.names, collapse = ", "), "\n")
       cat("-> time period: ", as.character(self$time[1]), " to ", as.character(self$time[self$T]), "\n")
+      cat("-> model: ", as.character(self$p.lag), " lags of all variables\n")
       self$beta <- solve(t(self$X) %*% self$X, t(self$X) %*% self$Y)
       self$U <- self$Y - self$X %*% self$beta
       self$Sigma <- t(self$U) %*% self$U / (self$T.est - self$n.var - 1)
@@ -55,8 +56,8 @@ VAR <- R6Class(
       # TODO add IV and sign identification methods
       if (method == "recursive") {
         self$B <- t(chol(self$Sigma))
-        B.invT <- t(solve(self$B))
-        self$eps <- self$U %*% B.invT # use B matrix and reduced-form shock to compute structural shock
+        B.Tinv <- solve(t(self$B))
+        self$eps <- self$U %*% B.Tinv # use B matrix and reduced-form shock to compute structural shock
       }
       cat("* model identified using ", method, " approach.\n")
     },
@@ -86,7 +87,7 @@ VAR <- R6Class(
       IRF.res <- self$IRF.compute(boot = boot)
       self$Psi <- IRF.res$Psi
       self$IRF <- IRF.res$IRF
-      cat("-> IRF computed for ", self$hor, " horizons.")
+      cat("-> IRF computed for ", self$hor, " horizons.\n")
       self$FEVD <- self$FEVD.compute()
       cat("-> FEVD computed for", self$hor, " horizons.")
     },
@@ -157,6 +158,7 @@ bVAR <- R6Class(
           "nu" = priors[[4]]
         )
         self$prior.type <- "user"
+        cat("* Bayesian VAR priors set by user.\n")
       } else if (prior.type == "flat") {
         self$alpha.prior <- list(
           "mean" = as.vector(t(cbind(rep(0, self$n.var), diag(n.var), matrix(0, self$n.var, self$n.var * (self$p.lag - 1))))),
@@ -166,6 +168,7 @@ bVAR <- R6Class(
           "mean" = diag(self$n.var),
           "nu" = self$n.var + 1
         )
+        cat("* Bayesian VAR priors set as cheap guess.\n")
       } else if (prior.type == "info") {
         self$alpha.prior <- list(
           "mean" = as.vector(self$beta),
@@ -175,6 +178,7 @@ bVAR <- R6Class(
           "mean" = self$Sigma,
           "nu" = self$n.var + 1
         )
+        cat("* Bayesian VAR priors set as OLS estimates.\n")
       } else {
         stop("please follow the instructions to set priors")
       }
@@ -193,19 +197,33 @@ bVAR <- R6Class(
         ## temporally save parameters estimated, if not using sign restrictions
         self$beta <- matrix(rowMeans(out$alpha), self$n.var * self$p.lag + 1, self$n.var)
         self$Sigma <- apply(out$Sigma, c(1, 2), mean)
-        cat("* posterior parameters estimated using ", method, " method.") # TODO add other priors
+        cat("* posterior parameters estimated using ", method, " method.\n")
         ## return loglik for potential analysis
         return(out$loglik)
+      } else if (method == "conjugate") {
+        # define quantities, since the notations here is different from SVAA, where I pick the formula
+        V <- 0.1 * diag(self$n.var * self$p.lag + 1)
+        A.star <- t(matrix(self$alpha.prior$mean, self$n.var * self$p.lag + 1, self$n.var))
+        Sigma.mu <- self$Sigma
+        S.star <- self$Sigma.prior$mean
+        # conjugate estimation of posteriors, instead of Gibbs sampler, to save time
+        conj.out <- private$conjugate.post(self$Y, self$X, V, A.star, Sigma.mu, S.star)
+        self$alpha.post <- list("mean" = as.vector(t(conj.out$A.bar)), "cov" = conj.out$Sigma.alpha.bar)
+        self$Sigma.post <- list("mean" = conj.out$S, "nu" = conj.out$tau)
+        cat("* posterior parameters estimated using ", method, " method.\n")
+      } else {
+        stop("please set appropriate estimation method!")
       }
-      # other method, like conjugate
     },
     identify = function(method = "sign", SR = NA, EBR = NA, NSR = NA, draw = 1000, save = 1000, M = 100, hor = self$hor, IV = NA) {
       if (method == "recursive" | method == "IV") {
         super$identify(method, IV)
       } else if (method == "sign") {
         restrictions <- private$get.restrictions(SR, EBR, NSR)
-        cat("* restrictions get.")
-        tic("Sign restriction identification time usage")
+        res.num <- length(restrictions)
+        cat("* ", res.num, " restrictions get.\n* Start drawing samples.\n")
+        mystr <- paste("*", as.character(draw), "draws, each draw use another", as.character(M), "draws to compute weights, time usage: ")
+        tic(msg = mystr)
         sign.out <- private$sign.identify(restrictions, draw, M, save, hor)
         toc()
         # save drawn structural parameters and IRFs
@@ -215,8 +233,8 @@ bVAR <- R6Class(
         self$IRF.draw <- sign.out$IRF_saved
         cat("* model identified via sign restrictions approach.\n")
         self$IRF.avg <- apply(self$IRF.draw, c(1, 2), median)
-        self$IRF.ub <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = 0.95))
-        self$IRF.lb <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = 0.05))
+        self$IRF.ub <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = 0.84))
+        self$IRF.lb <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = 0.16))
         cat("* IRF credible set and median estimation yield.")
       } else {
         stop("Please set appropriate identify method!")
@@ -224,41 +242,65 @@ bVAR <- R6Class(
     }
   ),
   private = list(
+    conjugate.post = function(Y.data, X, V, A.star, Sigma.mu, S.star) {
+      Y <- t(Y.data)
+      Z <- t(X)
+      T <- dim(Y)[2]
+      n <- dim(Y)[1]
+      V.inv <- solve(V)
+      my.inv <- solve(V.inv + tcrossprod(Z))
+      Sigma.alpha.bar <- my.inv %x% Sigma.mu
+      A.bar <- (A.star %*% V.inv + Y %*% t(Z)) %*% my.inv
+      A.hat <- tcrossprod(Y, Z) %*% solve(tcrossprod(Z))
+      Sigma.mu.tilde <- tcrossprod(Y - A.hat %*% Z) / T
+      S <- T * Sigma.mu.tilde + S.star + tcrossprod(A.hat %*% Z) + A.star %*% V.inv %*% t(A.star) - A.bar %*% (V.inv + tcrossprod(Z)) %*% t(A.bar)
+      tau <- T + n
+      return(
+        list(
+          "A.bar" = A.bar,
+          "Sigma.alpha.bar" = Sigma.alpha.bar,
+          "S" = S,
+          "tau" = tau
+        )
+      )
+    },
     gibbs.sampler = function(Y, X, priors, burn.in, draw, thin, post.save, post.method) {
       out <- gibbs_sampler(Y, X, priors, burn.in, draw, thin, post.save, post.method)
       return(out)
     },
     get.restrictions = function(SR = NA, EBR = NA, NSR = NA) {
       restrictions <- list()
-      if (!is.na(SR)) {
+      flag = 1
+      if (any(!is.na(SR))) {
         for (i in 1:length(SR)) {
           len.var <- length(SR[[i]][[2]])
           shock <- SR[[i]][[1]]
           h <- SR[[i]][[3]]
           sign <- SR[[i]][[4]]
           for (j in 1:len.var) {
-            var <- SR[[i]][[2]][[j]]
-            restrictions <- c(restrictions, list(
+            var <- SR[[i]][[2]][j]
+            restrictions[[flag]] <- list(
               "type" = "SR",
               "shock" = which(self$var.names == shock),
               "var" = which(self$var.names == var),
               "h" = h,
               "sign" = sign
-            ))
+            )
+            flag = flag + 1
           }
         }
       }
-      if (!is.na(EBR)) {
+      if (any(!is.na(EBR))) {
         for (i in 1:length(EBR)) {
-          shock <- SR[[i]][[1]]
-          h <- SR[[i]][[3]]
-          mb <- SR[[i]][[4]]
-          lb <- SR[[i]][[5]]
+          shock <- EBR[[i]][[1]]
+          h <- EBR[[i]][[3]]
+          mb <- EBR[[i]][[4]]
+          lb <- EBR[[i]][[5]]
           if (is.na(mb)) mb <- Inf
           if (is.na(lb)) lb <- -Inf
-          var.1 <- SR[[i]][[2]][[1]]
-          var.2 <- SR[[i]][[2]][[2]]
-          restrictions <- c(restrictions, list(
+          var.1 <- EBR[[i]][[2]][1]
+          var.2 <- EBR[[i]][[2]][2]
+          restrictions[[flag]] <- list(
             "type" = "EBR",
             "shock" = which(self$var.names == shock),
             "var.1" = which(self$var.names == var.1),
@@ -266,10 +308,11 @@ bVAR <- R6Class(
             "h" = h,
             "max.bound" = mb,
             "low.bound" = lb
-          ))
+          )
+          flag = flag + 1
         }
       }
-      if (!is.na(NSR)) {
+      if (any(!is.na(NSR))) {
         for (i in 1:length(NSR)) {
           shock <- NSR[[i]][[1]]
           type <- NSR[[i]][[2]]
@@ -277,18 +320,19 @@ bVAR <- R6Class(
           end <- which(self$time == NSR[[i]][[4]]) - self$p.lag
           if (length(NSR[[i]]) == 5) {
             sign <- NSR[[i]][[5]]
-            restrictions <- c(restrictions, list(
+            restrictions[[flag]] <- list(
               "type" = "NSR",
               "NSR.type" = "sign",
               "shock" = which(self$var.names == shock),
               "period" = start:end,
               "sign" = sign,
-            ))
+            )
+            flag = flag + 1
           } else {
             var <- NSR[[i]][[5]]
             sign <- NSR[[i]][[6]]
             intensity <- NSR[[i]][[7]]
-            restrictions <- c(restrictions, list(
+            restrictions[[flag]] <- list(
               "type" = "NSR",
               "NSR.type" = "contribution",
               "shock" = which(self$var.names == shock),
@@ -296,7 +340,8 @@ bVAR <- R6Class(
               "period" = start:end,
               "sign" = sign,
               "intensity" = intensity
-            ))
+            )
+            flag = flag + 1
           }
         }
       }
