@@ -16,5 +16,5 @@ For detailed illustration, see https://goldenbaozi.github.io/BayesVAR.html
 # Progress
 
 - most code finished, start testing using AR 2018 data
-- current results not satisfied
+- current results not satisfied, IRF HPD set too wide.
 - **time consuming**: use all 12 restrictions of example 1, 10 draws require about 2500 seconds.
