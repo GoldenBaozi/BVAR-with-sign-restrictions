@@ -2,14 +2,14 @@ library(Rcpp)
 library(RcppArmadillo)
 library(microbenchmark)
 library(R.matlab)
+library(vars)
 
 sourceCpp("./src/VARtools.cpp")
-sourceCpp('./src/BVARdraw.cpp')
+sourceCpp("./src/BVARdraw.cpp")
 source("./scripts/VARclass.R")
 
 df <- readMat("./NS2018/data/data/Kilian_Data_Updated.mat")
-df$varNames[1,1][[1]][[1]][1,1]
-varnames <- c(df$varNames[1,1][[1]][[1]][1,1], df$varNames[1,2][[1]][[1]][1,1], df$varNames[1,3][[1]][[1]][1,1])
+varnames <- c(df$varNames[1, 1][[1]][[1]][1, 1], df$varNames[1, 2][[1]][[1]][1, 1], df$varNames[1, 3][[1]][[1]][1, 1])
 
 dates <- as.Date(df$dates - 719529)
 
@@ -20,16 +20,24 @@ df.in <- data.frame(
 colnames(df.in)[2:4] <- varnames
 
 
-plag <- 12
+plag <- 24
 
 bvar <- bVAR$new(df.in, plag)
+bvar$Sigma
 # test conjugate method
+t(chol(bvar$Sigma))
 bvar$est(method = "conjugate")
-# bvar$Sigma.post$mean
-# bvar$Sigma.post$nu
+
+# check S post is same as AR 2018
+bvar$Sigma.post$mean
+bvar$Sigma.post$nu
+tail(bvar$alpha.post$mean) # alpha post is also the same
+sourceCpp("./src/testwish.cpp") # check inv wish posterior
+
+test_invwish(bvar$Sigma.post$mean, bvar$Sigma.post$nu)
 
 SR <- list(
-  list("Oil Production Growth", c("Oil Production Growth","Economic Activity Index"), 0, -1),
+  list("Oil Production Growth", c("Oil Production Growth", "Economic Activity Index"), 0, -1),
   list("Oil Production Growth", "Real Oil Price", 0, 1),
   list("Economic Activity Index", c("Oil Production Growth", "Economic Activity Index", "Real Oil Price"), 0, 1),
   list("Real Oil Price", c("Oil Production Growth", "Real Oil Price"), 0, 1),
@@ -48,11 +56,16 @@ NSR <- list(
 which(bvar$time == NSR[[1]][[3]]) # correct time input
 which(bvar$var.names == NSR[[1]][[1]]) # correct var name input
 str(bvar$.__enclos_env__$private$get.restrictions(SR, EBR, NSR))
-bvar$identify(SR=SR, EBR=EBR, NSR=NSR, draw=10, save=10, M=100, hor=18)
+bvar$identify(SR = SR, EBR = EBR, draw = 100, save = 100, M = 10)
 
-plot(bvar$IRF.avg[2,], type = "l", lty = 1, lwd = 2, col = 4, ylim = c(-5, 10))
-lines(bvar$IRF.lb[2,], lty = 2, col = 2)
-lines(bvar$IRF.ub[2,], lty = 2, col = 2)
+# plot(bvar$IRF.avg[7, ], type = "l", lty = 1, lwd = 2, col = 4, ylim = c(-5, 10))
+# lines(bvar$IRF.lb[7, ], lty = 2, col = 2)
+# lines(bvar$IRF.ub[7, ], lty = 2, col = 2)
+# bvar$IRF.avg
 
-rm(list=c("bvar"))
-gc()
+# rm(list = c("bvar"))
+# gc()
+
+# test progress bar
+sourceCpp("./src/test.cpp")
+save.image("mydata.RData")

@@ -176,7 +176,7 @@ bVAR <- R6Class(
         )
         self$Sigma.prior <- list(
           "mean" = self$Sigma,
-          "nu" = self$n.var + 1
+          "nu" = 0
         )
         cat("* Bayesian VAR priors set as OLS estimates.\n")
       } else {
@@ -215,27 +215,28 @@ bVAR <- R6Class(
         stop("please set appropriate estimation method!")
       }
     },
-    identify = function(method = "sign", SR = NA, EBR = NA, NSR = NA, draw = 1000, save = 1000, M = 100, hor = self$hor, IV = NA) {
+    identify = function(method = "sign", SR = NA, EBR = NA, NSR = NA, draw = 1000, save = 1000, M = 100, IV = NA) {
       if (method == "recursive" | method == "IV") {
         super$identify(method, IV)
       } else if (method == "sign") {
-        restrictions <- private$get.restrictions(SR, EBR, NSR)
+        restrictions <- private$get.restrictions(SR, EBR, NSR)$restrictions
+        max.irf <- private$get.restrictions(SR, EBR, NSR)$max.irf
         res.num <- length(restrictions)
         cat("* ", res.num, " restrictions get.\n* Start drawing samples.\n")
-        mystr <- paste("*", as.character(draw), "draws, each draw use another", as.character(M), "draws to compute weights, time usage: ")
+        mystr <- paste("*", as.character(draw), "draws saved with sign and elasticity restrictions satisfied, time usage")
         tic(msg = mystr)
-        sign.out <- private$sign.identify(restrictions, draw, M, save, hor)
+        sign.out <- private$sign.identify(restrictions, draw, M, save, max.irf)
         toc()
         # save drawn structural parameters and IRFs
         self$beta.draw <- sign.out$beta_saved
         self$B.draw <- sign.out$B_saved
         self$Sigma.draw <- sign.out$Sigma_saved
-        self$IRF.draw <- sign.out$IRF_saved
-        cat("* model identified via sign restrictions approach.\n")
-        self$IRF.avg <- apply(self$IRF.draw, c(1, 2), median)
-        self$IRF.ub <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = 0.84))
-        self$IRF.lb <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = 0.16))
-        cat("* IRF credible set and median estimation yield.")
+        # self$IRF.draw <- sign.out$IRF_saved
+        # cat("* model identified via sign restrictions approach.\n")
+        # self$IRF.avg <- apply(self$IRF.draw, c(1, 2), median)
+        # self$IRF.ub <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = 0.84))
+        # self$IRF.lb <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = 0.16))
+        # cat("* IRF credible set and median estimation yield.")
       } else {
         stop("Please set appropriate identify method!")
       }
@@ -254,7 +255,8 @@ bVAR <- R6Class(
       A.hat <- tcrossprod(Y, Z) %*% solve(tcrossprod(Z))
       Sigma.mu.tilde <- tcrossprod(Y - A.hat %*% Z) / T
       S <- T * Sigma.mu.tilde + S.star + tcrossprod(A.hat %*% Z) + A.star %*% V.inv %*% t(A.star) - A.bar %*% (V.inv + tcrossprod(Z)) %*% t(A.bar)
-      tau <- T + n
+      # tau <- T + n
+      tau <- T
       return(
         list(
           "A.bar" = A.bar,
@@ -270,12 +272,14 @@ bVAR <- R6Class(
     },
     get.restrictions = function(SR = NA, EBR = NA, NSR = NA) {
       restrictions <- list()
-      flag = 1
+      max.irf <- 0
+      flag <- 1
       if (any(!is.na(SR))) {
         for (i in 1:length(SR)) {
           len.var <- length(SR[[i]][[2]])
           shock <- SR[[i]][[1]]
           h <- SR[[i]][[3]]
+          if (h > max.irf) max.irf <- h
           sign <- SR[[i]][[4]]
           for (j in 1:len.var) {
             var <- SR[[i]][[2]][j]
@@ -294,6 +298,7 @@ bVAR <- R6Class(
         for (i in 1:length(EBR)) {
           shock <- EBR[[i]][[1]]
           h <- EBR[[i]][[3]]
+          if (h > max.irf) max.irf <- h
           mb <- EBR[[i]][[4]]
           lb <- EBR[[i]][[5]]
           if (is.na(mb)) mb <- Inf
@@ -309,7 +314,7 @@ bVAR <- R6Class(
             "max.bound" = mb,
             "low.bound" = lb
           )
-          flag = flag + 1
+          flag <-  flag + 1
         }
       }
       if (any(!is.na(NSR))) {
@@ -318,6 +323,7 @@ bVAR <- R6Class(
           type <- NSR[[i]][[2]]
           start <- which(self$time == NSR[[i]][[3]]) - self$p.lag
           end <- which(self$time == NSR[[i]][[4]]) - self$p.lag
+          if ((end-start) > max.irf) max.irf <- end - start
           if (length(NSR[[i]]) == 5) {
             sign <- NSR[[i]][[5]]
             restrictions[[flag]] <- list(
@@ -341,11 +347,14 @@ bVAR <- R6Class(
               "sign" = sign,
               "intensity" = intensity
             )
-            flag = flag + 1
+            flag <- flag + 1
           }
         }
       }
-      return(restrictions)
+      return(list(
+        "restrictions" = restrictions,
+        "max.irf" = max.irf
+      ))
     },
     sign.identify = function(restrictions, draw, M, save, hor) {
       out <- sign_restrictions_main(self$alpha.post, self$Sigma.post, restrictions, self$Y, self$X, draw, self$p.lag, hor, M, save)

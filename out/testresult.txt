@@ -6,3 +6,5 @@ Unit: seconds
  gibbs Cpp  5.077  5.17 11.46  10.22 18.52 19.34    10
 
 Kilian 2015 data, Gibbs sampler 1000 draws time: 337.36 secs
+
+11 restrictions (without NSR), 1000 draws + M=1000, total time 27421 seconds = 7 h.

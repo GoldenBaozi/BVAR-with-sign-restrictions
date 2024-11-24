@@ -17,4 +17,8 @@ For detailed illustration, see https://goldenbaozi.github.io/BayesVAR.html
 
 - most code finished, start testing using AR 2018 data
 - current results not satisfied, IRF HPD set too wide.
-- **time consuming**: use all 12 restrictions of example 1, 10 draws require about 2500 seconds.
+- I re-read AR2018's data, and now strictly follow there procedure of checking restrictions. It greatly increases running efficiency
+  - first, check NR and EBR, no NSR, and only compute IRF needed (don't save it)
+  - for every drawing $\alpha$ and $\Sigma$, draw another 100 $Q$ trying to match them
+  - second, impose NSR
+  - third, compute IRF for `first` set and `second` set

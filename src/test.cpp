@@ -1,9 +1,13 @@
 #include <RcppArmadillo.h>
+#include <progress.hpp>
+#include <progress_bar.hpp>
 
 // [[Rcpp::depends(RcppArmadillo)]]
+// [[Rcpp::depends(RcppProgress)]]
 
 using namespace Rcpp;
 using namespace arma;
+using namespace std;
 
 // [[Rcpp::export]]
 mat test_resize() {
@@ -34,8 +38,26 @@ mat flatten_cube(cube obj) {
     return out;
 }
 
+// [[Rcpp::export]]
+int add_progress(int range) {
+    int report = range / 10;
+    Progress p(10, true);
+    Function f("Sys.sleep");
+    for (int i = 0; i < range; i++)
+    {
+        f(1);
+        if (i % report == 0)
+        {
+            p.increment();
+            Rcout << i << " draws done.\n";
+        }
+    }
+    return 0;
+}
+
 /*** R
-input <- array(1:8, c(2,2,2))
-input
-flatten_cube(input)
+# input <- array(1:8, c(2,2,2))
+# input
+# flatten_cube(input)
+add_progress(10)
 */
