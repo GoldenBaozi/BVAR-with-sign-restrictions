@@ -7,4 +7,8 @@ Unit: seconds
 
 Kilian 2015 data, Gibbs sampler 1000 draws time: 337.36 secs
 
-11 restrictions (without NSR), 1000 draws + M=1000, total time 27421 seconds = 7 h.
+11 erstrictions (without NSR), modify procedure, 5000 draws, total time 40 min
+
+2000 draws saved with sign and elasticity restrictions satisfied, total time usage: 1639.9 sec elapsed
+
+result good.

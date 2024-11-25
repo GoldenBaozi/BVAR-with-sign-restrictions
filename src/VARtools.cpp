@@ -1,13 +1,18 @@
 #include <RcppArmadillo.h>
-#include <progress.hpp>
-#include <progress_bar.hpp>
+// #include <progress.hpp>
+// #include <progress_bar.hpp>
+#include <chrono>
 
 // [[Rcpp::depends(RcppArmadillo)]]
-// [[Rcpp::depends(RcppProgress)]]
+
+/*
+[[Rcpp::depends(RcppProgress)]]
+*/
 
 using namespace Rcpp;
 using namespace arma;
 using namespace std;
+using namespace chrono;
 
 // [[Rcpp::export]]
 List IRF_compute(mat beta, mat B, int hor, int nvar, int plag)
@@ -53,6 +58,21 @@ cube IRF_compute_1(mat beta, mat B, int hor, int nvar, int plag)
     }
 
     return IRF;
+}
+
+// [[Rcpp::export]]
+double max_root(mat beta)
+{
+    int nvar = beta.n_cols;
+    int plag = (beta.n_rows - 1) / nvar;
+    mat beta_1 = beta.t();
+    mat beta_lag = beta_1.submat(0, 1, beta_1.n_rows - 1, beta_1.n_cols - 1);
+    mat large_eye = eye(nvar * (plag - 1), nvar * (plag - 1));
+    mat large_zero = zeros((plag - 1) * nvar, nvar);
+    mat beta_compact = join_cols(beta_lag, join_rows(large_eye, large_zero));
+    cx_vec roots = eig_gen(beta_compact);
+    double max_root = max(abs(roots));
+    return max_root;
 }
 
 // [[Rcpp::export]]
@@ -116,6 +136,23 @@ mat flatten_cube(cube obj)
         out.row(i) = tmp.slice(0);
     }
     return out;
+}
+
+// [[Rcpp::export]]
+cube IRF_draws(cube beta_draw, cube B_draw, int hor)
+{
+    int nvar = B_draw.n_cols;
+    int draw_num = B_draw.n_slices;
+    int plag = (beta_draw.n_rows - 1) / nvar;
+    cube IRF_draws(nvar * nvar, hor + 1, draw_num);
+    for (int i = 0; i < draw_num; i++)
+    {
+        mat beta = beta_draw.slice(i);
+        mat B = B_draw.slice(i);
+        cube IRF_1draw = IRF_compute_1(beta, B, hor, nvar, plag);
+        IRF_draws.slice(i) = flatten_cube(IRF_1draw);
+    }
+    return IRF_draws;
 }
 
 bool check_SR_and_EBR(List restrictions, cube IRF)
@@ -243,7 +280,7 @@ double compute_importance_weight(List restrictions, cube IRF, int M, int row, in
 }
 
 // [[Rcpp::export]]
-List sign_restrictions_main(List alpha_post, List Sigma_post, List restrictions, mat Y, mat X, int draw, int plag, int hor, int M, int save)
+List sign_restrictions_main(List alpha_post, List Sigma_post, List restrictions, mat Y, mat X, int draw, int plag, int hor)
 {
     int nvar = Y.n_cols;
     int T_est = Y.n_rows;
@@ -262,44 +299,59 @@ List sign_restrictions_main(List alpha_post, List Sigma_post, List restrictions,
     int flag = 0;
     int report = draw / 10;
     int try_per_beta_sigma = 100;
-    Progress p(10, true);
+    auto start_time = high_resolution_clock::now();
+    // Progress p(10, true);
     // loop on draw
     while (flag < draw)
     {
-        vec alpha_1draw = mvnrnd(alpha_post_mean, alpha_post_cov);
         mat Sigma_1draw = iwishrnd(Sigma_post_mean, nu_post);
+        mat N0 = inv(X.t()*X);
+        mat NT = kron(Sigma_1draw, N0);
+        mat cov = chol(NT, "lower");
+        vec alpha_1draw = alpha_post_mean + cov * randn(alpha_post_mean.n_elem, 1);
         mat beta_1draw = reshape(alpha_1draw, nvar * plag + 1, nvar);
         mat u_1draw = Y - X * beta_1draw;
         mat P = chol(Sigma_1draw, "lower");
-        for (int i = 0; i < try_per_beta_sigma; i++)
+        double maxroot = max_root(beta_1draw);
+        if (maxroot <= 1)
         {
-            mat X = randn(nvar, nvar);
-            mat Q, R;
-            qr(Q, R, X);
-            Q = Q * diagmat(sign(R.diag()));
-            mat B_1draw = P * Q;
-            mat B_inv_1draw = inv(trans(B_1draw));
-            // mat eps_1draw = u_1draw * B_inv_1draw;
-            cube IRF_1draw = IRF_compute_1(beta_1draw, B_1draw, hor, nvar, plag);
-            // check sign restrictions, to decide save or not
-            bool save_me = check_SR_and_EBR(restrictions, IRF_1draw);
-            if (save_me)
+            for (int i = 0; i < try_per_beta_sigma; i++)
             {
-                B_draw.slice(flag) = B_1draw;
-                beta_draw.slice(flag) = beta_1draw;
-                Sigma_draw.slice(flag) = Sigma_1draw;
-                // Rcout << IRF_1draw.n_slices << "\n";
-                // IRF_draw.slice(flag) = flatten_cube(IRF_1draw);
-                // weights(flag) = compute_importance_weight(restrictions, IRF_1draw, M, T_est, nvar);
-                // Rcout << weights(flag) <<"\n";
-                flag++;
-                if (flag % report == 0)
+                mat X = randn(nvar, nvar);
+                mat Q, R;
+                qr(Q, R, X);
+                Q = Q * diagmat(sign(R.diag()));
+                mat B_1draw = P * Q;
+                mat B_inv_1draw = inv(trans(B_1draw));
+                // mat eps_1draw = u_1draw * B_inv_1draw;
+                cube IRF_1draw = IRF_compute_1(beta_1draw, B_1draw, hor, nvar, plag);
+                // check sign restrictions, to decide save or not
+                bool save_me = check_SR_and_EBR(restrictions, IRF_1draw);
+                if (save_me)
                 {
-                    // Rcout << "-> " << flag << " draws saved.\n";
-                    p.increment();
+                    B_draw.slice(flag) = B_1draw;
+                    beta_draw.slice(flag) = beta_1draw;
+                    Sigma_draw.slice(flag) = Sigma_1draw;
+                    // Rcout << IRF_1draw.n_slices << "\n";
+                    // IRF_draw.slice(flag) = flatten_cube(IRF_1draw);
+                    // weights(flag) = compute_importance_weight(restrictions, IRF_1draw, M, T_est, nvar);
+                    // Rcout << weights(flag) <<"\n";
+                    flag++;
+                    if (flag % report == 0)
+                    {
+                        auto current_time = high_resolution_clock::now();
+                        auto elapsed_time = duration_cast<seconds>(current_time - start_time).count();
+                        Rcout << "-> " << flag << " draws saved, total time usage: " << elapsed_time << " seconds.\n";
+                        // p.increment();
+                    }
                 }
             }
         }
+        else
+        {
+            continue;
+        }
+        
     }
     Rcout << "* All draws are done\n";
     // re-weight using importance sampling
@@ -318,5 +370,57 @@ List sign_restrictions_main(List alpha_post, List Sigma_post, List restrictions,
         _["beta_saved"] = beta_draw,
         _["Sigma_saved"] = Sigma_draw
         // _["IRF_saved"] = IRF_saved
-        );
+    );
+}
+// [[Rcpp::export]]
+List sign_restrictions_NSR(List restrictions, mat Y, mat X, cube B_draw, cube beta_draw, cube Sigma_draw, int plag, int hor, int M)
+{
+    int nvar = Y.n_cols;
+    int T_est = Y.n_rows;
+    int init_draw = B_draw.n_slices;
+    // save draws
+    cube B_NSR(nvar, nvar, init_draw);
+    cube Sigma_NSR(nvar, nvar, init_draw);
+    cube beta_NSR(nvar * plag + 1, nvar, init_draw);
+    vec weights(init_draw);
+    // flag and supervisor
+    int flag = 0;
+    // loop on draw
+    for (int i = 0; i < init_draw; i++)
+    {
+        mat beta_1draw = beta_draw.slice(i);
+        mat B_1draw = B_draw.slice(i);
+        mat Sigma_1draw = Sigma_draw.slice(i);
+        mat B_inv_1draw = inv(trans(B_1draw));
+        mat eps_1draw = (Y - X * beta_1draw) * B_inv_1draw;
+        cube IRF_1draw = IRF_compute_1(beta_1draw, B_1draw, hor, nvar, plag);
+        bool save_me = check_NSR(restrictions, IRF_1draw, eps_1draw);
+        if (save_me)
+        {
+            B_NSR.slice(flag) = B_1draw;
+            beta_NSR.slice(flag) = beta_1draw;
+            Sigma_NSR.slice(flag) = Sigma_1draw;
+            weights(flag) = compute_importance_weight(restrictions, IRF_1draw, M, T_est, nvar);
+            flag++;
+        }
+        else
+        {
+            continue;
+        }
+    }
+    Rcout << "* " << flag << " draws in " << init_draw << " satisfy NSR, resampling using weights...\n";
+    // re-weight using importance sampling
+    vec x = linspace(0, flag - 1, flag);
+    NumericVector xx = wrap(x);
+    NumericVector my_weights = wrap(weights);
+    NumericVector new_id = sample(xx, flag, true, my_weights);
+    uvec save_id = as<uvec>(new_id);
+    cube B_saved = B_NSR.slices(save_id);
+    cube beta_saved = beta_NSR.slices(save_id);
+    cube Sigma_saved = Sigma_NSR.slices(save_id);
+
+    return List::create(
+        _["B_NSR"] = B_saved,
+        _["beta_NSR"] = beta_saved,
+        _["Sigma_NSR"] = Sigma_saved);
 }

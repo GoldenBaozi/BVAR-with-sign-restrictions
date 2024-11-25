@@ -49,7 +49,7 @@ VAR <- R6Class(
       cat("-> model: ", as.character(self$p.lag), " lags of all variables\n")
       self$beta <- solve(t(self$X) %*% self$X, t(self$X) %*% self$Y)
       self$U <- self$Y - self$X %*% self$beta
-      self$Sigma <- t(self$U) %*% self$U / (self$T.est - self$n.var - 1)
+      self$Sigma <- (t(self$U) %*% self$U) / (self$T.est)
       cat("* reduced form VAR estimated using OLS.\n")
     },
     identify = function(method = "recursive", IV = NA) {
@@ -138,12 +138,12 @@ bVAR <- R6Class(
     beta.draw = NULL, ## matrix of alpha
     Sigma.draw = NULL, ## cov of Y-X \times beta, used for cholesky decomposition
     B.draw = NULL,
+    beta.NSR = NULL, ## matrix of alpha
+    Sigma.NSR = NULL, ## cov of Y-X \times beta, used for cholesky decomposition
+    B.NSR = NULL,
     # related non-orthogonal/orthogonal shocks and IRFs
     IRF.draw = NULL,
-    # statistics of IRF
-    IRF.avg = NULL,
-    IRF.ub = NULL,
-    IRF.lb = NULL,
+    IRF.NSR = NULL,
     initialize = function(data = NA, p.lag = NA, prior.type = "info", priors = NA) {
       # need to check data and p.lag input
       super$initialize(data, p.lag)
@@ -201,7 +201,7 @@ bVAR <- R6Class(
         ## return loglik for potential analysis
         return(out$loglik)
       } else if (method == "conjugate") {
-        # define quantities, since the notations here is different from SVAA, where I pick the formula
+        # define quantities following Kilian (2017)
         V <- 0.1 * diag(self$n.var * self$p.lag + 1)
         A.star <- t(matrix(self$alpha.prior$mean, self$n.var * self$p.lag + 1, self$n.var))
         Sigma.mu <- self$Sigma
@@ -215,7 +215,7 @@ bVAR <- R6Class(
         stop("please set appropriate estimation method!")
       }
     },
-    identify = function(method = "sign", SR = NA, EBR = NA, NSR = NA, draw = 1000, save = 1000, M = 100, IV = NA) {
+    identify = function(method = "sign", SR = NA, EBR = NA, NSR = NA, draw = 5000, M = 1000, IV = NA) {
       if (method == "recursive" | method == "IV") {
         super$identify(method, IV)
       } else if (method == "sign") {
@@ -223,23 +223,45 @@ bVAR <- R6Class(
         max.irf <- private$get.restrictions(SR, EBR, NSR)$max.irf
         res.num <- length(restrictions)
         cat("* ", res.num, " restrictions get.\n* Start drawing samples.\n")
-        mystr <- paste("*", as.character(draw), "draws saved with sign and elasticity restrictions satisfied, time usage")
+        mystr <- paste("*", as.character(draw), "draws saved with sign and elasticity restrictions satisfied, total time usage")
         tic(msg = mystr)
-        sign.out <- private$sign.identify(restrictions, draw, M, save, max.irf)
+        sign.out <- private$sign.identify(restrictions, draw, M, max.irf)
         toc()
         # save drawn structural parameters and IRFs
         self$beta.draw <- sign.out$beta_saved
         self$B.draw <- sign.out$B_saved
         self$Sigma.draw <- sign.out$Sigma_saved
-        # self$IRF.draw <- sign.out$IRF_saved
-        # cat("* model identified via sign restrictions approach.\n")
-        # self$IRF.avg <- apply(self$IRF.draw, c(1, 2), median)
-        # self$IRF.ub <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = 0.84))
-        # self$IRF.lb <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = 0.16))
-        # cat("* IRF credible set and median estimation yield.")
+        # mystr <- "* checking NSR...\n"
+        # tic(msg=mystr)
+        # NSR.out <- sign_restrictions_NSR(restrictions, self$Y, self$X, self$B.draw, self$beta.draw, self$Sigma.draw, self$p.lag, max.irf, M)
+        # toc()
+        # self$beta.NSR <- NSR.out$beta_NSR
+        # self$B.NSR <- NSR.out$B_NSR
+        # self$Sigma.NSR <- NSR.out$Sigma_NSR
       } else {
         stop("Please set appropriate identify method!")
       }
+    },
+    IRF.compute = function(hor, prob) {
+      msg <- paste("* IRF computed and", prob, "HDP get, time usage:")
+      HDP <- c((1 - prob) / 2, 1 - (1 - prob) / 2)
+      tic(msg)
+      self$IRF.draw <- IRF_draws(self$beta.draw, self$B.draw, hor)
+      # self$IRF.NSR <- IRF_draws(self$beta.NSR, self$B.NSR, hor)
+      IRF.avg <- apply(self$IRF.draw, c(1, 2), median)
+      IRF.ub <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = HDP[2]))
+      IRF.lb <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = HDP[1]))
+      # self$IRF.NSR.avg <- apply(self$IRF.NSR, c(1, 2), median)
+      # self$IRF.NSR.ub <- apply(self$IRF.NSR, c(1, 2), function(x) quantile(x, probs = HDP[2]))
+      # self$IRF.NSR.lb <- apply(self$IRF.NSR, c(1, 2), function(x) quantile(x, probs = HDP[1]))
+      toc()
+      return(
+        list(
+          "avg" = IRF.avg,
+          "ub" = IRF.ub,
+          "lb" = IRF.lb
+        )
+      )
     }
   ),
   private = list(
@@ -290,7 +312,7 @@ bVAR <- R6Class(
               "h" = h,
               "sign" = sign
             )
-            flag = flag + 1
+            flag <- flag + 1
           }
         }
       }
@@ -314,7 +336,7 @@ bVAR <- R6Class(
             "max.bound" = mb,
             "low.bound" = lb
           )
-          flag <-  flag + 1
+          flag <- flag + 1
         }
       }
       if (any(!is.na(NSR))) {
@@ -323,7 +345,7 @@ bVAR <- R6Class(
           type <- NSR[[i]][[2]]
           start <- which(self$time == NSR[[i]][[3]]) - self$p.lag
           end <- which(self$time == NSR[[i]][[4]]) - self$p.lag
-          if ((end-start) > max.irf) max.irf <- end - start
+          if ((end - start) > max.irf) max.irf <- end - start
           if (length(NSR[[i]]) == 5) {
             sign <- NSR[[i]][[5]]
             restrictions[[flag]] <- list(
@@ -333,7 +355,7 @@ bVAR <- R6Class(
               "period" = start:end,
               "sign" = sign,
             )
-            flag = flag + 1
+            flag <- flag + 1
           } else {
             var <- NSR[[i]][[5]]
             sign <- NSR[[i]][[6]]
@@ -356,8 +378,8 @@ bVAR <- R6Class(
         "max.irf" = max.irf
       ))
     },
-    sign.identify = function(restrictions, draw, M, save, hor) {
-      out <- sign_restrictions_main(self$alpha.post, self$Sigma.post, restrictions, self$Y, self$X, draw, self$p.lag, hor, M, save)
+    sign.identify = function(restrictions, draw, M, hor) {
+      out <- sign_restrictions_main(self$alpha.post, self$Sigma.post, restrictions, self$Y, self$X, draw, self$p.lag, hor)
       return(out)
     }
   )
