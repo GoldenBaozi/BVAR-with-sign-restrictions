@@ -13,7 +13,7 @@ The sign restriction procedure cannot be vectorized, must put it in Rcpp !!
 
 For detailed illustration, see https://goldenbaozi.github.io/BayesVAR.html
 
-# Progress
+## Progress
 
 - Main result get.
 - **Note**: must check the max root of companion matrix, to ensure the stationary of the system !!!
@@ -22,10 +22,14 @@ For detailed illustration, see https://goldenbaozi.github.io/BayesVAR.html
   - for every drawing $\alpha$ and $\Sigma$, draw another 100 $Q$ trying to match them
   - second, impose NSR
   - finally, compute IRF for `first` set and `second` set
-- Now, 2000 draws takes about 1600 seconds (80 seconds -> 100 draws), while the original matlab code takes about 500 seconds for 100 draws.
+- Now, 2000 draws takes about 45 mins (200 seconds -> 100 draws), while the original matlab code takes about 500 seconds for 100 draws.
+- NSR hardly satisfied.
 
-# Rep result
+## Rep result
 
-Following is figure 2, part 1 of Antolín-Díaz and Rubio-Ramírez (2018), with only sigh restrictions and elasticity bound restrictions used.
+Following is figure 2 of Antolín-Díaz and Rubio-Ramírez (2018). 
 
-![AR2018 figure 2 part 1](./out/IRF_oil_no_NSR.png)
+- Blue line and grey shade: HDP of IRF with SR and EBR
+- Red line and pink shade: HDP of IRF with SR, EBR and NSR
+
+![AR2018 figure 2](./out/IRF_oil.png)

@@ -3,3 +3,4 @@ NS2018/
 temp/
 .vscode/
 *.RData
+data/*.csv

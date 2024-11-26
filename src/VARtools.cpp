@@ -248,18 +248,100 @@ bool check_NSR(List restrictions, cube IRF, mat eps)
                 bool cond0 = all(vectorise(test_sign) >= 0);
                 bool cond1 = all(vectorise(test_inten) >= 0);
                 bool cond2 = all(vectorise(test_inten) <= 0);
-                if ((inten == "strong" && cond0 && cond1) || (inten == "weak" && cond0 && cond2))
+                if ((inten == "strong" && cond1) || (inten == "weak" && cond2))
                 {
                     flag++;
                 }
             }
         }
-        else
-        {
-            continue;
-        }
     }
     bool out = (flag == NSR_num);
+    return out;
+}
+
+double check_all_restrictions(List restrictions, cube IRF, mat eps)
+{
+    int n = restrictions.length();
+    int flag = 0;
+    for (int i = 0; i < n; i++)
+    {
+        List res_1 = restrictions[i];
+        string type = as<string>(res_1[0]);
+        if (type == "SR")
+        {
+            int shock = as<int>(res_1[1]) - 1;
+            int var = as<int>(res_1[2]) - 1;
+            int hor = as<int>(res_1[3]);
+            double sign = as<double>(res_1[4]);
+            mat IRF_test = IRF.slice(hor);
+            double SR_test = IRF_test(var, shock) * sign;
+            if (SR_test > 0)
+            {
+                flag++;
+            }
+        }
+        if (type == "EBR")
+        {
+            int shock = as<int>(res_1[1]) - 1;
+            int var_1 = as<int>(res_1[2]) - 1;
+            int var_2 = as<int>(res_1[3]) - 1;
+            int hor = as<int>(res_1[4]);
+            double mb = as<double>(res_1[5]);
+            double lb = as<double>(res_1[6]);
+            mat IRF_test = IRF.slice(hor);
+            double EBR_test = IRF_test(var_1, shock) / IRF_test(var_2, shock);
+            // Rcout << mb << " " << lb << " " << EBR_test << "\n";
+            if (EBR_test <= mb && EBR_test >= lb)
+            {
+                flag++;
+            }
+
+            if (type == "NSR")
+            {
+                string NSR_type = as<string>(res_1[1]);
+                if (NSR_type == "sign")
+                {
+                    int shock = as<int>(res_1[2]) - 1;
+                    uvec period = as<uvec>(res_1[3]) - 1;
+                    double sign = as<double>(res_1[4]);
+                    mat eps_test = eps.submat(period(0), shock, period(period.n_elem - 1), shock) * sign;
+                    bool test = all(vectorise(eps_test) > 0);
+                    if (test)
+                    {
+                        flag++;
+                    }
+                }
+                else
+                {
+                    // here I don't set shock = ...-1, because the function HDC_ts will do this, to avoid messy
+                    int shock = as<int>(res_1[2]);
+                    int var = as<int>(res_1[3]);
+                    int nvar = eps.n_cols;
+                    uvec period = as<uvec>(res_1[4]);
+                    int start = period(0);
+                    int end = period(period.n_elem - 1);
+                    double sign = as<double>(res_1[5]);
+                    string inten = as<string>(res_1[6]);
+                    mat HDC_test(end - start + 1, nvar);
+                    for (int i = 0; i < nvar; i++)
+                    {
+                        HDC_test.col(i) = HDC_ts(start, end, i + 1, var, IRF, eps);
+                    }
+                    mat HDC_target = repmat(HDC_test.col(shock - 1), 1, nvar);
+                    mat test_sign = HDC_test.col(shock - 1) * sign;
+                    mat test_inten = abs(HDC_test) - abs(HDC_target);
+                    bool cond0 = all(vectorise(test_sign) >= 0);
+                    bool cond1 = all(vectorise(test_inten) >= 0);
+                    bool cond2 = all(vectorise(test_inten) <= 0);
+                    if ((inten == "strong" && cond1) || (inten == "weak" && cond2))
+                    {
+                        flag++;
+                    }
+                }
+            }
+        }
+    }
+    bool out = (flag == n);
     return out;
 }
 
@@ -280,7 +362,7 @@ double compute_importance_weight(List restrictions, cube IRF, int M, int row, in
 }
 
 // [[Rcpp::export]]
-List sign_restrictions_main(List alpha_post, List Sigma_post, List restrictions, mat Y, mat X, int draw, int plag, int hor)
+List impose_SR_and_EBR(List alpha_post, List Sigma_post, List restrictions, mat Y, mat X, int draw, int plag, int hor)
 {
     int nvar = Y.n_cols;
     int T_est = Y.n_rows;
@@ -288,8 +370,6 @@ List sign_restrictions_main(List alpha_post, List Sigma_post, List restrictions,
     cube B_draw(nvar, nvar, draw);
     cube beta_draw(nvar * plag + 1, nvar, draw);
     cube Sigma_draw(nvar, nvar, draw);
-    // cube IRF_draw(nvar*nvar, hor+1, draw);
-    vec weights(draw);
     // unpack priors
     vec alpha_post_mean = as<vec>(alpha_post[0]);
     mat alpha_post_cov = as<mat>(alpha_post[1]);
@@ -305,7 +385,7 @@ List sign_restrictions_main(List alpha_post, List Sigma_post, List restrictions,
     while (flag < draw)
     {
         mat Sigma_1draw = iwishrnd(Sigma_post_mean, nu_post);
-        mat N0 = inv(X.t()*X);
+        mat N0 = inv(X.t() * X);
         mat NT = kron(Sigma_1draw, N0);
         mat cov = chol(NT, "lower");
         vec alpha_1draw = alpha_post_mean + cov * randn(alpha_post_mean.n_elem, 1);
@@ -351,19 +431,8 @@ List sign_restrictions_main(List alpha_post, List Sigma_post, List restrictions,
         {
             continue;
         }
-        
     }
     Rcout << "* All draws are done\n";
-    // re-weight using importance sampling
-    // vec x = linspace(0, draw - 1, draw);
-    // NumericVector xx = wrap(x);
-    // NumericVector my_weights = wrap(weights);
-    // NumericVector new_id = sample(xx, save, true, my_weights);
-    // uvec save_id = as<uvec>(new_id);
-    // cube B_saved = B_draw.slices(save_id);
-    // cube beta_saved = beta_draw.slices(save_id);
-    // cube Sigma_saved = Sigma_draw.slices(save_id);
-    // cube IRF_saved = IRF_draw.slices(save_id);
 
     return List::create(
         _["B_saved"] = B_draw,
@@ -373,7 +442,7 @@ List sign_restrictions_main(List alpha_post, List Sigma_post, List restrictions,
     );
 }
 // [[Rcpp::export]]
-List sign_restrictions_NSR(List restrictions, mat Y, mat X, cube B_draw, cube beta_draw, cube Sigma_draw, int plag, int hor, int M)
+List impose_NSR(List restrictions, mat Y, mat X, cube B_draw, cube beta_draw, cube Sigma_draw, int plag, int hor, int M)
 {
     int nvar = Y.n_cols;
     int T_est = Y.n_rows;
@@ -403,16 +472,12 @@ List sign_restrictions_NSR(List restrictions, mat Y, mat X, cube B_draw, cube be
             weights(flag) = compute_importance_weight(restrictions, IRF_1draw, M, T_est, nvar);
             flag++;
         }
-        else
-        {
-            continue;
-        }
     }
-    Rcout << "* " << flag << " draws in " << init_draw << " satisfy NSR, resampling using weights...\n";
+    Rcout << "* " << flag << " draws in " << init_draw << " draws satisfy NSR, resampling using importance weights...\n";
     // re-weight using importance sampling
     vec x = linspace(0, flag - 1, flag);
     NumericVector xx = wrap(x);
-    NumericVector my_weights = wrap(weights);
+    NumericVector my_weights = wrap(weights.head(flag));
     NumericVector new_id = sample(xx, flag, true, my_weights);
     uvec save_id = as<uvec>(new_id);
     cube B_saved = B_NSR.slices(save_id);
@@ -423,4 +488,85 @@ List sign_restrictions_NSR(List restrictions, mat Y, mat X, cube B_draw, cube be
         _["B_NSR"] = B_saved,
         _["beta_NSR"] = beta_saved,
         _["Sigma_NSR"] = Sigma_saved);
+}
+
+// [[Rcpp::export]]
+List impose_all_restrictions(List alpha_post, List Sigma_post, List restrictions, mat Y, mat X, int draw, int plag, int hor, int M)
+{
+    int nvar = Y.n_cols;
+    int T_est = Y.n_rows;
+    // save draws
+    cube B_draw(nvar, nvar, draw);
+    cube beta_draw(nvar * plag + 1, nvar, draw);
+    cube Sigma_draw(nvar, nvar, draw);
+    vec weights(draw);
+    // unpack priors
+    vec alpha_post_mean = as<vec>(alpha_post[0]);
+    mat alpha_post_cov = as<mat>(alpha_post[1]);
+    mat Sigma_post_mean = as<mat>(Sigma_post[0]);
+    int nu_post = as<int>(Sigma_post[1]);
+    // flag and supervisor
+    int flag = 0;
+    int report = draw / 10;
+    int try_per_beta_sigma = 100;
+    auto start_time = high_resolution_clock::now();
+    // loop on draw
+    while (flag < draw)
+    {
+        mat Sigma_1draw = iwishrnd(Sigma_post_mean, nu_post);
+        mat N0 = inv(X.t() * X);
+        mat NT = kron(Sigma_1draw, N0);
+        mat cov = chol(NT, "lower");
+        vec alpha_1draw = alpha_post_mean + cov * randn(alpha_post_mean.n_elem, 1);
+        mat beta_1draw = reshape(alpha_1draw, nvar * plag + 1, nvar);
+        mat u_1draw = Y - X * beta_1draw;
+        mat P = chol(Sigma_1draw, "lower");
+        double maxroot = max_root(beta_1draw);
+        if (maxroot <= 1)
+        {
+            for (int i = 0; i < try_per_beta_sigma; i++)
+            {
+                mat X = randn(nvar, nvar);
+                mat Q, R;
+                qr(Q, R, X);
+                Q = Q * diagmat(sign(R.diag()));
+                mat B_1draw = P * Q;
+                mat B_inv_1draw = inv(trans(B_1draw));
+                mat eps_1draw = u_1draw * B_inv_1draw;
+                cube IRF_1draw = IRF_compute_1(beta_1draw, B_1draw, hor, nvar, plag);
+                // check sign restrictions, to decide save or not
+                bool save_me = check_all_restrictions(restrictions, IRF_1draw, eps_1draw);
+                if (save_me)
+                {
+                    B_draw.slice(flag) = B_1draw;
+                    beta_draw.slice(flag) = beta_1draw;
+                    Sigma_draw.slice(flag) = Sigma_1draw;
+                    weights(flag) = compute_importance_weight(restrictions, IRF_1draw, M, T_est, nvar);
+                    flag++;
+                    if (flag % report == 0)
+                    {
+                        auto current_time = high_resolution_clock::now();
+                        auto elapsed_time = duration_cast<seconds>(current_time - start_time).count();
+                        Rcout << "-> " << flag << " draws saved, total time usage: " << elapsed_time << " seconds.\n";
+                    }
+                }
+            }
+        }
+    }
+    Rcout << "* All draws are done\n";
+    // re-weight using importance sampling
+    vec x = linspace(0, draw - 1, draw);
+    NumericVector xx = wrap(x);
+    NumericVector my_weights = wrap(weights);
+    NumericVector new_id = sample(xx, draw, true, my_weights);
+    uvec save_id = as<uvec>(new_id);
+    cube B_saved = B_draw.slices(save_id);
+    cube beta_saved = beta_draw.slices(save_id);
+    cube Sigma_saved = Sigma_draw.slices(save_id);
+
+    return List::create(
+        _["B_saved"] = B_draw,
+        _["beta_saved"] = beta_draw,
+        _["Sigma_saved"] = Sigma_draw
+    );
 }

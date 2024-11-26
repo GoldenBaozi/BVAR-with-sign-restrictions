@@ -34,7 +34,6 @@ VAR <- R6Class(
       self$data <- as.matrix(data[, 2:(self$n.var + 1)])
       self$p.lag <- p.lag
       self$T.est <- self$T - p.lag
-      self$hor <- self$T
       self$var.names <- colnames(self$data)
       self$Y <- self$data[(1 + p.lag):self$T, ]
       Y.lag <- self$data[p.lag:(self$T - 1), ]
@@ -50,28 +49,27 @@ VAR <- R6Class(
       self$beta <- solve(t(self$X) %*% self$X, t(self$X) %*% self$Y)
       self$U <- self$Y - self$X %*% self$beta
       self$Sigma <- (t(self$U) %*% self$U) / (self$T.est)
-      cat("* reduced form VAR estimated using OLS.\n")
+      cat("* reduced form VAR parameters estimated using OLS.\n")
     },
     identify = function(method = "recursive", IV = NA) {
-      # TODO add IV and sign identification methods
+      # TODO add IV identification
       if (method == "recursive") {
-        self$B <- t(chol(self$Sigma))
-        B.Tinv <- solve(t(self$B))
+        self$B <- t(chol(self$Sigma)) # to get lower triangular factor
+        B.Tinv <- solve(t(self$B)) # Note here eps is actually eps' and U is U', and eps'=u'B'^{-1}
         self$eps <- self$U %*% B.Tinv # use B matrix and reduced-form shock to compute structural shock
       }
       cat("* model identified using ", method, " approach.\n")
     },
-    IRF.compute = function(beta = self$beta, B = self$B, hor = self$hor, boot = FALSE) {
+    IRF.compute = function(hor = NA_integer_) {
       #' @return IRF.list$Psi, IRF.list$IRF, 3-D array
-      if (!boot) {
-        IRF.list <- IRF_compute(beta, B, hor, self$n.var, self$p.lag)
-        return(IRF.list)
-      }
+      IRF.out <- IRF_compute(self$beta, self$B, hor, self$n.var, self$p.lag)
+      self$hor <- hor
+      self$Psi <- IRF.out$Psi
+      self$IRF <- IRF.out$IRF
     },
-    FEVD.compute = function(Sigma = self$Sigma, B = self$B, Psi = self$Psi, hor = self$hor) {
+    FEVD.compute = function(hor = self$hor) {
       #' @return FEVD 3-D array
-      FEVD <- FEVD_compute(Sigma, B, Psi, self$n.var, hor)
-      return(FEVD)
+      self$FEVD <- FEVD_compute(self$Sigma, self$B, self$Psi, self$n.var, self$hor)
     },
     HDC.compute = function(start = NA_character_, end = NA_character_, shock = NA_character_, res = NA_character_) {
       #' @return a matrix of (end-start) x 1
@@ -81,45 +79,7 @@ VAR <- R6Class(
       end.id <- which(self$time == end) - self$p.lag
       HDC <- HDC_ts(start.id, end.id, shock.id, res.id, self$IRF, self$eps)
       return(HDC)
-    },
-    tools = function(boot = FALSE) {
-      cat("* computing structural VAR tools ...\n")
-      IRF.res <- self$IRF.compute(boot = boot)
-      self$Psi <- IRF.res$Psi
-      self$IRF <- IRF.res$IRF
-      cat("-> IRF computed for ", self$hor, " horizons.\n")
-      self$FEVD <- self$FEVD.compute()
-      cat("-> FEVD computed for", self$hor, " horizons.")
-    },
-    IRF.plot = function(shock = NA_character_, response = NA_character_, hor = self$hor, CI = FALSE) { # by default plot the whole horizon
-      shock.id <- which(self$var.names == shock)
-      res.id <- which(self$var.names == response)
-      # violation <- (identical(shock.id, integer(0)) | identical(res.id, integer(0)))
-      # if (violation) {
-      #   stop("Please give appropriate variable names")
-      # }
-      irf.to.plot <- self$IRF[res.id, shock.id, 1:(hor + 1)]
-      x <- 0:hor
-      # if (hor > self$hor) {
-      #   msg <- paste("horizon >", self$hor, "not allowed")
-      #   stop(msg)
-      # }
-      plot(x, irf.to.plot,
-        type = "l",
-        lty = 1, lwd = 2, col = 4,
-        xlab = "horizon", ylab = response
-      )
-      # TODO add CI option
-      title(main = paste("IRF of", response, "to", shock, "shock"))
-      abline(h = 0, lwd = 3, lty = 2)
     }
-  ),
-  private = list(
-    est.OLS = function(Y = self$Y, X = self$X) {
-      beta <- solve(t(X) %*% X, t(X) %*% Y)
-      return(beta)
-    }
-    # TODO bootstraps
   )
 )
 # TODO write a gibbs sampler for VAR bayesian estimation
@@ -166,7 +126,7 @@ bVAR <- R6Class(
         )
         self$Sigma.prior <- list(
           "mean" = diag(self$n.var),
-          "nu" = self$n.var + 1
+          "nu" = 0
         )
         cat("* Bayesian VAR priors set as cheap guess.\n")
       } else if (prior.type == "info") {
@@ -189,7 +149,7 @@ bVAR <- R6Class(
         priors <- c(self$alpha.prior, self$Sigma.prior)
         cat("* Gibbs sampler start...\n")
         tic("Gibbs sampler time usage")
-        out <- private$gibbs.sampler(Y, X, priors, burn.in, draw, thin, post.save, post.method)
+        out <- gibbs_sampler(Y, X, priors, burn.in, draw, thin, post.save, post.method)
         toc()
         ## save posterior parameters
         self$alpha.post <- list("mean" = out$alpha_mean_post, "cov" = out$alpha_cov_post)
@@ -215,46 +175,75 @@ bVAR <- R6Class(
         stop("please set appropriate estimation method!")
       }
     },
-    identify = function(method = "sign", SR = NA, EBR = NA, NSR = NA, draw = 5000, M = 1000, IV = NA) {
+    identify.seq = function(method = "sign", SR = NA, EBR = NA, NSR = NA, draw = 5000, M = 1000, IV = NA) {
       if (method == "recursive" | method == "IV") {
         super$identify(method, IV)
       } else if (method == "sign") {
-        restrictions <- private$get.restrictions(SR, EBR, NSR)$restrictions
-        max.irf <- private$get.restrictions(SR, EBR, NSR)$max.irf
+        restrictions.out <- private$get.restrictions(SR, EBR, NSR)
+        restrictions <- restrictions.out$restrictions
+        max.irf <- restrictions.out$max.irf
+        is.nsr <- restrictions.out$is.nsr
         res.num <- length(restrictions)
-        cat("* ", res.num, " restrictions get.\n* Start drawing samples.\n")
+        cat("* ", res.num, " restrictions get.\n* First impose SR and EBR on drawn samples:\n")
         mystr <- paste("*", as.character(draw), "draws saved with sign and elasticity restrictions satisfied, total time usage")
         tic(msg = mystr)
-        sign.out <- private$sign.identify(restrictions, draw, M, max.irf)
+        sign.out <- impose_SR_and_EBR(self$alpha.post, self$Sigma.post, restrictions, self$Y, self$X, draw, self$p.lag, max.irf)
         toc()
         # save drawn structural parameters and IRFs
         self$beta.draw <- sign.out$beta_saved
         self$B.draw <- sign.out$B_saved
         self$Sigma.draw <- sign.out$Sigma_saved
-        # mystr <- "* checking NSR...\n"
-        # tic(msg=mystr)
-        # NSR.out <- sign_restrictions_NSR(restrictions, self$Y, self$X, self$B.draw, self$beta.draw, self$Sigma.draw, self$p.lag, max.irf, M)
-        # toc()
-        # self$beta.NSR <- NSR.out$beta_NSR
-        # self$B.NSR <- NSR.out$B_NSR
-        # self$Sigma.NSR <- NSR.out$Sigma_NSR
+        if (is.nsr) {
+          cat("* checking NSR...\n")
+          mystr <- "* Narrative restrictions imposed, time usage"
+          tic(msg = mystr)
+          NSR.out <- impose_NSR(restrictions, self$Y, self$X, self$B.draw, self$beta.draw, self$Sigma.draw, self$p.lag, max.irf, M)
+          toc()
+          self$beta.NSR <- NSR.out$beta_NSR
+          self$B.NSR <- NSR.out$B_NSR
+          self$Sigma.NSR <- NSR.out$Sigma_NSR
+        }
+        cat("* identification done.\n")
       } else {
         stop("Please set appropriate identify method!")
       }
     },
-    IRF.compute = function(hor, prob) {
+    identify.all = function(SR = NA, EBR = NA, NSR = NA, draw = 5000, M = 1000) {
+      restrictions.out <- private$get.restrictions(SR, EBR, NSR)
+      restrictions <- restrictions.out$restrictions
+      max.irf <- restrictions.out$max.irf
+      res.num <- length(restrictions)
+      cat("* ", res.num, " restrictions get.\n* impose all restrictions on drawn samples:\n")
+      mystr <- paste("*", as.character(draw), "draws saved with all restrictions satisfied, total time usage")
+      tic(msg = mystr)
+      sign.out <- impose_all_restrictions(self$alpha.post, self$Sigma.post, restrictions, self$Y, self$X, draw, self$p.lag, max.irf, M)
+      toc()
+      # save drawn structural parameters and IRFs
+      self$beta.draw <- sign.out$beta_saved
+      self$B.draw <- sign.out$B_saved
+      self$Sigma.draw <- sign.out$Sigma_saved
+      cat("identification done.\n")
+    },
+    IRF.compute = function(hor, prob, set = "traditional") {
       msg <- paste("* IRF computed and", prob, "HDP get, time usage:")
       HDP <- c((1 - prob) / 2, 1 - (1 - prob) / 2)
-      tic(msg)
-      self$IRF.draw <- IRF_draws(self$beta.draw, self$B.draw, hor)
-      # self$IRF.NSR <- IRF_draws(self$beta.NSR, self$B.NSR, hor)
-      IRF.avg <- apply(self$IRF.draw, c(1, 2), median)
-      IRF.ub <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = HDP[2]))
-      IRF.lb <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = HDP[1]))
-      # self$IRF.NSR.avg <- apply(self$IRF.NSR, c(1, 2), median)
-      # self$IRF.NSR.ub <- apply(self$IRF.NSR, c(1, 2), function(x) quantile(x, probs = HDP[2]))
-      # self$IRF.NSR.lb <- apply(self$IRF.NSR, c(1, 2), function(x) quantile(x, probs = HDP[1]))
-      toc()
+      if (set == "traditional") {
+        tic(msg)
+        self$IRF.draw <- IRF_draws(self$beta.draw, self$B.draw, hor)
+        IRF.avg <- apply(self$IRF.draw, c(1, 2), median)
+        IRF.ub <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = HDP[2]))
+        IRF.lb <- apply(self$IRF.draw, c(1, 2), function(x) quantile(x, probs = HDP[1]))
+        toc()
+      } else if (set == "NSR") {
+        tic(msg)
+        self$IRF.NSR <- IRF_draws(self$beta.NSR, self$B.NSR, hor)
+        IRF.avg <- apply(self$IRF.NSR, c(1, 2), median)
+        IRF.ub <- apply(self$IRF.NSR, c(1, 2), function(x) quantile(x, probs = HDP[2]))
+        IRF.lb <- apply(self$IRF.NSR, c(1, 2), function(x) quantile(x, probs = HDP[1]))
+        toc()
+      } else {
+        cat("please specify correct IRF computation type")
+      }
       return(
         list(
           "avg" = IRF.avg,
@@ -288,14 +277,11 @@ bVAR <- R6Class(
         )
       )
     },
-    gibbs.sampler = function(Y, X, priors, burn.in, draw, thin, post.save, post.method) {
-      out <- gibbs_sampler(Y, X, priors, burn.in, draw, thin, post.save, post.method)
-      return(out)
-    },
     get.restrictions = function(SR = NA, EBR = NA, NSR = NA) {
       restrictions <- list()
       max.irf <- 0
       flag <- 1
+      is.NSR <- FALSE
       if (any(!is.na(SR))) {
         for (i in 1:length(SR)) {
           len.var <- length(SR[[i]][[2]])
@@ -340,6 +326,7 @@ bVAR <- R6Class(
         }
       }
       if (any(!is.na(NSR))) {
+        is.NSR <- TRUE
         for (i in 1:length(NSR)) {
           shock <- NSR[[i]][[1]]
           type <- NSR[[i]][[2]]
@@ -375,12 +362,9 @@ bVAR <- R6Class(
       }
       return(list(
         "restrictions" = restrictions,
-        "max.irf" = max.irf
+        "max.irf" = max.irf,
+        "is.nsr" = is.NSR
       ))
-    },
-    sign.identify = function(restrictions, draw, M, hor) {
-      out <- sign_restrictions_main(self$alpha.post, self$Sigma.post, restrictions, self$Y, self$X, draw, self$p.lag, hor)
-      return(out)
     }
   )
 )
