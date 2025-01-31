@@ -1,3 +1,7 @@
+# Note: this repo is expired
+
+please refer to the complete R package repo: https://github.com/GoldenBaozi/VARS
+
 # Estimation and Inference of VAR with Bayesian methods
 
 - [x] basic VAR, OLS Estimation
